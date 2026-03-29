@@ -1,0 +1,4 @@
+vendor
+examples
+.idea
+.phpunit.result.cache
