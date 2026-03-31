@@ -14,6 +14,7 @@ use Didasto\Apilot\OpenApi\OpenApiGenerator;
 use Didasto\Apilot\OpenApi\PathBuilder;
 use Didasto\Apilot\OpenApi\SchemaBuilder;
 use Didasto\Apilot\OpenApi\SpecValidator;
+use Didasto\Apilot\Routing\AttributeRouteRegistrar;
 use Didasto\Apilot\Routing\CrudRouteRegistrar;
 use Didasto\Apilot\Routing\RouteRegistry;
 
@@ -58,6 +59,10 @@ class ApilotServiceProvider extends ServiceProvider
         $this->app->singleton(SpecValidator::class, function () {
             return new SpecValidator();
         });
+
+        $this->app->singleton(AttributeRouteRegistrar::class, function ($app) {
+            return new AttributeRouteRegistrar($app->make(RouteRegistry::class));
+        });
     }
 
     public function boot(): void
@@ -73,6 +78,15 @@ class ApilotServiceProvider extends ServiceProvider
         }
 
         $this->app['router']->aliasMiddleware('apilot.json', ForceJsonResponse::class);
+
+        if (config('apilot.auto_discover.enabled', false)) {
+            $registrar = $this->app->make(AttributeRouteRegistrar::class);
+            foreach (config('apilot.auto_discover.directories', []) as $entry) {
+                if (!empty($entry['directory']) && !empty($entry['namespace'])) {
+                    $registrar->registerDirectory($entry['directory'], $entry['namespace']);
+                }
+            }
+        }
 
         if (config('apilot.openapi.enabled', true)) {
             Route::prefix(config('apilot.prefix', 'api'))

@@ -90,6 +90,28 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Auto-Discovery for #[ApiResource] Attributes
+    |--------------------------------------------------------------------------
+    | When enabled, the service provider scans the configured directories
+    | for controller classes annotated with #[ApiResource] and registers
+    | their routes automatically on boot.
+    */
+    'auto_discover' => [
+
+        // Set to true to enable automatic scanning.
+        'enabled' => false,
+
+        // Directories to scan. Each entry needs 'directory' and 'namespace'.
+        'directories' => [
+            [
+                'directory' => null, // e.g. app_path('Http/Controllers/Api')
+                'namespace' => 'App\\Http\\Controllers\\Api',
+            ],
+        ],
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | OpenAPI Specification
     |--------------------------------------------------------------------------
     */

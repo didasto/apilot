@@ -1,107 +1,239 @@
 # Filtering
 
-Apilot supports three filter strategies. Filters are declared per-controller and applied automatically when a client sends `?filter[field]=value`.
+Apilot supports an operator-based filter system with three configuration levels. Filters are applied automatically when a client sends `?filter[field]=value` or `?filter[field][operator]=value`.
 
-## Filter Types
+## Request Formats
 
-| Type | Enum | SQL Equivalent | Use When |
-|------|------|---------------|----------|
-| Exact match | `AllowedFilter::EXACT` | `WHERE field = value` | Status, category, boolean flags |
-| Partial match | `AllowedFilter::PARTIAL` | `WHERE field LIKE %value%` | Search strings, names, titles |
-| Scope | `AllowedFilter::SCOPE` | Calls `$query->field($value)` | Complex logic in a model scope |
+### Legacy Format (still supported)
 
-## Declaring Allowed Filters
+```
+GET /api/posts?filter[status]=published
+GET /api/posts?filter[title]=laravel
+```
+
+### Operator Format
+
+```
+GET /api/products?filter[status][eq]=active
+GET /api/products?filter[price][gte]=9.99
+GET /api/products?filter[id][in]=1,2,3,4,5
+GET /api/products?filter[created_at][between]=2025-01-01,2025-12-31
+GET /api/products?filter[deleted_at][isNull]=1
+```
+
+Multiple filters are combined with `AND`:
+
+```
+GET /api/products?filter[price][gte]=10&filter[price][lte]=100&filter[name][like]=Pro
+```
+
+---
+
+## All Operators
+
+| Operator | Query Parameter Suffix | SQL Equivalent | Value Format | Example |
+|----------|----------------------|----------------|--------------|---------|
+| `eq` | `[eq]` | `WHERE field = value` | Single value | `filter[status][eq]=active` |
+| `neq` | `[neq]` | `WHERE field != value` | Single value | `filter[status][neq]=draft` |
+| `in` | `[in]` | `WHERE field IN (...)` | Comma-separated | `filter[id][in]=1,2,3` |
+| `notIn` | `[notIn]` | `WHERE field NOT IN (...)` | Comma-separated | `filter[status][notIn]=draft,archived` |
+| `gt` | `[gt]` | `WHERE field > value` | Single value | `filter[id][gt]=10` |
+| `lt` | `[lt]` | `WHERE field < value` | Single value | `filter[id][lt]=100` |
+| `gte` | `[gte]` | `WHERE field >= value` | Single value | `filter[price][gte]=9.99` |
+| `lte` | `[lte]` | `WHERE field <= value` | Single value | `filter[price][lte]=99.99` |
+| `like` | `[like]` | `WHERE field LIKE %value%` | Single value | `filter[title][like]=Laravel` |
+| `notLike` | `[notLike]` | `WHERE field NOT LIKE %value%` | Single value | `filter[title][notLike]=deprecated` |
+| `between` | `[between]` | `WHERE field BETWEEN a AND b` | `start,end` | `filter[created_at][between]=2025-01-01,2025-12-31` |
+| `notBetween` | `[notBetween]` | `WHERE field NOT BETWEEN a AND b` | `start,end` | `filter[price][notBetween]=0,5` |
+| `isNull` | `[isNull]` | `WHERE field IS NULL` | Any value (e.g. `1`) | `filter[deleted_at][isNull]=1` |
+| `isNotNull` | `[isNotNull]` | `WHERE field IS NOT NULL` | Any value (e.g. `1`) | `filter[email][isNotNull]=1` |
+
+### Legacy Operators (backwards compatible)
+
+| Operator | SQL Equivalent |
+|----------|---------------|
+| `AllowedFilter::EXACT` | `WHERE field = value` (alias for `eq`) |
+| `AllowedFilter::PARTIAL` | `WHERE field LIKE %value%` (alias for `like`) |
+| `AllowedFilter::SCOPE` | Calls a model query scope |
+
+---
+
+## Configuration — 3 Levels
+
+### Level 1 — Single Operator (Enum)
 
 ```php
 use Didasto\Apilot\Enums\AllowedFilter;
 
 protected array $allowedFilters = [
-    'status'   => AllowedFilter::EXACT,
-    'title'    => AllowedFilter::PARTIAL,
-    'category' => AllowedFilter::EXACT,
+    'status' => AllowedFilter::EQUALS,
 ];
 ```
 
-Any field not in `$allowedFilters` is silently ignored. Clients cannot filter on undeclared fields.
+Accepts both:
+- `?filter[status]=active` (legacy format, uses the configured operator as default)
+- `?filter[status][eq]=active` (operator format)
 
-## Request Format
+### Level 2 — Multiple Operators (Array of Enums)
 
-```
-GET /api/posts?filter[status]=published
-GET /api/posts?filter[title]=laravel
-GET /api/posts?filter[status]=published&filter[title]=laravel
-```
-
-### Multiple Filters
-
-Multiple filters are combined with `AND`:
-
-```
-GET /api/posts?filter[status]=published&filter[category]=php
+```php
+protected array $allowedFilters = [
+    'id' => [AllowedFilter::EQUALS, AllowedFilter::IN, AllowedFilter::GT, AllowedFilter::LT],
+];
 ```
 
-Generates:
+- `?filter[id]=5` → uses the **first** operator in the array as default (`EQUALS`)
+- `?filter[id][in]=1,2,3` → `WHERE id IN (1, 2, 3)`
+- `?filter[id][like]=test` → ignored (not in the allowed list)
 
-```sql
-WHERE status = 'published' AND category = 'php'
+### Level 3 — FilterSet Class
+
+```php
+use Didasto\Apilot\Filters\IdFilter;
+use Didasto\Apilot\Filters\NumericFilter;
+use Didasto\Apilot\Filters\TextFilter;
+use Didasto\Apilot\Filters\DateFilter;
+
+protected array $allowedFilters = [
+    'id'         => IdFilter::class,
+    'price'      => NumericFilter::class,
+    'title'      => TextFilter::class,
+    'created_at' => DateFilter::class,
+];
 ```
 
-## SCOPE Filter
+Internally the class is instantiated and `->filters()` returns the allowed operator array. Behaviour is identical to Level 2.
 
-The `SCOPE` type calls a named [Eloquent local scope](https://laravel.com/docs/eloquent#local-scopes) on the model, passing the filter value as the first argument.
+### Mixing All 3 Levels
+
+```php
+protected array $allowedFilters = [
+    'id'         => IdFilter::class,              // FilterSet
+    'status'     => AllowedFilter::EQUALS,        // Single enum
+    'price'      => [AllowedFilter::GTE, AllowedFilter::LTE],  // Array
+    'title'      => TextFilter::class,            // FilterSet
+    'created_at' => DateFilter::class,            // FilterSet
+    'category'   => AllowedFilter::SCOPE,         // Legacy scope
+];
+```
+
+---
+
+## Built-in FilterSets
+
+| Class | Included Operators | Typical Use Case |
+|-------|--------------------|-----------------|
+| `IdFilter` | `eq`, `neq`, `in`, `notIn` | Primary key / foreign key fields |
+| `NumericFilter` | `eq`, `neq`, `in`, `notIn`, `gt`, `lt`, `gte`, `lte`, `between` | Prices, quantities, scores |
+| `TextFilter` | `eq`, `neq`, `like`, `notLike`, `in`, `isNull`, `isNotNull` | Names, titles, descriptions |
+| `DateFilter` | `eq`, `neq`, `gt`, `lt`, `gte`, `lte`, `between`, `isNull`, `isNotNull` | Dates and timestamps |
+| `BooleanFilter` | `eq`, `isNull`, `isNotNull` | Boolean flags |
+
+---
+
+## Creating a Custom FilterSet
+
+```php
+namespace App\Filters;
+
+use Didasto\Apilot\Filters\FilterSet;
+use Didasto\Apilot\Enums\AllowedFilter;
+
+class StatusFilter extends FilterSet
+{
+    protected array $filters = [
+        AllowedFilter::EQUALS,
+        AllowedFilter::NOT_EQUALS,
+        AllowedFilter::IN,
+    ];
+}
+```
+
+```php
+use App\Filters\StatusFilter;
+use Didasto\Apilot\Filters\IdFilter;
+use Didasto\Apilot\Filters\NumericFilter;
+
+class ProductController extends ModelCrudController
+{
+    protected string $model = Product::class;
+
+    protected array $allowedFilters = [
+        'id'     => IdFilter::class,
+        'status' => StatusFilter::class,
+        'price'  => NumericFilter::class,
+    ];
+}
+```
+
+---
+
+## ServiceCrudController
+
+For `ServiceCrudController`, `allowedFilters` uses the same 3-level configuration. The controller validates which operators are allowed and passes a structured array to the service's `list()` method:
 
 ```php
 // Controller
-protected array $allowedFilters = [
-    'published_after' => AllowedFilter::SCOPE,
-];
-```
-
-```php
-// App\Models\Post
-public function scopePublishedAfter(Builder $query, string $date): Builder
+class ProductController extends ServiceCrudController
 {
-    return $query->where('published_at', '>=', $date);
+    protected string $serviceClass = ProductService::class;
+
+    protected array $allowedFilters = [
+        'id'   => IdFilter::class,
+        'name' => TextFilter::class,
+    ];
 }
 ```
 
 ```
-GET /api/posts?filter[published_after]=2024-01-01
+GET /api/products?filter[name][like]=Laravel&filter[id][gt]=5
 ```
 
-The scope name must match the filter key exactly. The `scope` prefix is added by Eloquent automatically.
+The service receives:
 
-## Empty Values Are Ignored
-
-If a client sends an empty filter value, Apilot silently skips it — no empty `WHERE` clause is added:
-
-```
-GET /api/posts?filter[status]=
-```
-
-The `status` filter is not applied. All posts are returned.
-
-## Non-Array Values Are Ignored
-
-If a client sends the filter as a plain string instead of an array, it is silently ignored:
-
-```
-GET /api/posts?filter=status
+```php
+$filters = [
+    'name' => ['like' => 'Laravel'],
+    'id'   => ['gt'   => '5'],
+];
 ```
 
-This does not cause an error.
+Legacy format is also converted to the operator format when using the new associative `allowedFilters`:
 
-## ServiceCrudController Differences
+```
+GET /api/products?filter[name]=Laravel
+→ $filters = ['name' => ['eq' => 'Laravel']]
+```
 
-For `ServiceCrudController`, `$allowedFilters` is a plain list of field names — not an associative array:
+### Legacy ServiceCrudController format (backwards compatible)
+
+The old integer-indexed format still works unchanged:
 
 ```php
 protected array $allowedFilters = ['name', 'category', 'status'];
 ```
 
-Apilot passes the active filters as an associative `array $filters` to your service's `list()` method. Your service applies them however it sees fit (e.g., forwarding them as query parameters to an external API).
+In this case `extractFilters()` returns `['name' => 'Laravel']` (plain values), same as before.
 
-See [Service CRUD Controller](04-service-crud-controller.md) for the full interface.
+---
+
+## Backwards Compatibility
+
+- `AllowedFilter::EXACT`, `AllowedFilter::PARTIAL`, `AllowedFilter::SCOPE` are still valid and work as before
+- `?filter[field]=value` (legacy request format) works for all controller types
+- Existing controllers with the old `AllowedFilter::EXACT` / `AllowedFilter::PARTIAL` configuration require no changes
+- All filter values are applied via Eloquent query builder parameter binding — no raw SQL
+
+---
+
+## Special Behaviour Notes
+
+- **Empty values** are silently ignored: `?filter[status]=` → no filter applied
+- **Disallowed operators** are silently ignored: `?filter[id][like]=test` when `like` is not in the allowed list
+- **BETWEEN** requires exactly 2 comma-separated values; otherwise the filter is ignored
+- **IS NULL / IS NOT NULL** ignore the request value; any value (e.g. `1`) must be sent
+- **LIKE / NOT LIKE** automatically wraps the value in `%` wildcards and escapes `%` and `_` characters in the input
+- **IN / NOT IN** values are split on comma; empty segments are removed
 
 ---
 

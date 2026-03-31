@@ -15,6 +15,9 @@ return new class extends Migration
             $table->string('title');
             $table->text('body')->nullable();
             $table->string('status')->default('draft');
+            $table->decimal('price', 8, 2)->nullable()->default(null);
+            $table->boolean('is_active')->default(false);
+            $table->string('category')->nullable()->default(null);
             $table->timestamps();
         });
     }

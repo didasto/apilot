@@ -14,10 +14,12 @@ class Post extends Model
 
     protected $table = 'posts';
 
-    protected $fillable = ['title', 'body', 'status'];
+    protected $fillable = ['title', 'body', 'status', 'price', 'is_active', 'category'];
 
     protected $casts = [
-        'status' => 'string',
+        'status'    => 'string',
+        'price'     => 'decimal:2',
+        'is_active' => 'boolean',
     ];
 
     protected static function newFactory(): PostFactory
@@ -28,5 +30,10 @@ class Post extends Model
     public function scopeStatus(Builder $query, string $value): Builder
     {
         return $query->where('status', '=', $value);
+    }
+
+    public function scopeCategory(Builder $query, string $value): Builder
+    {
+        return $query->where('category', '=', $value);
     }
 }

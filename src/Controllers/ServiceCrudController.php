@@ -11,14 +11,18 @@ use LogicException;
 use Didasto\Apilot\Contracts\CrudServiceInterface;
 use Didasto\Apilot\Dto\PaginatedResult;
 use Didasto\Apilot\Dto\PaginationParams;
+use Didasto\Apilot\Enums\AllowedFilter;
 use Didasto\Apilot\Exceptions\ActionNotAllowedException;
 use Didasto\Apilot\Exceptions\ResourceNotFoundException;
+use Didasto\Apilot\Traits\HasFilterResolution;
 
 abstract class ServiceCrudController extends BaseCrudController
 {
+    use HasFilterResolution;
+
     protected string $serviceClass;
 
-    /** @var array<int, string> */
+    /** @var array<int, string>|array<string, AllowedFilter|array<int, AllowedFilter>|class-string> */
     protected array $allowedFilters = [];
 
     /** @var array<int, string> */
@@ -68,7 +72,7 @@ abstract class ServiceCrudController extends BaseCrudController
     {
         $service = $this->resolveService();
 
-        $validated = $this->resolveFormRequest();
+        $validated = $this->resolveFormRequest('store');
         $validated = $this->beforeStore($validated, $request);
         $item = $service->create($validated);
         $item = $this->afterStore($item, $request);
@@ -90,7 +94,7 @@ abstract class ServiceCrudController extends BaseCrudController
             throw new ResourceNotFoundException();
         }
 
-        $validated = $this->resolveFormRequest();
+        $validated = $this->resolveFormRequest('update');
         $validated = $this->beforeUpdate($existing, $validated, $request);
         $item = $service->update($id, $validated);
         $item = $this->afterUpdate($item, $request);
@@ -152,26 +156,58 @@ abstract class ServiceCrudController extends BaseCrudController
 
     protected function extractFilters(Request $request): array
     {
-        $filterParam = config('apilot.filtering.param', 'filter');
-        $filters = $request->input($filterParam);
+        $filterInput = $request->input(config('apilot.filtering.param', 'filter'), []);
 
-        if (empty($filters) || !is_array($filters)) {
+        if (!is_array($filterInput)) {
             return [];
         }
 
+        // Legacy format: integer-indexed array ['name', 'slug']
+        if (!empty($this->allowedFilters) && is_int(array_key_first($this->allowedFilters))) {
+            return $this->extractFiltersLegacy($filterInput);
+        }
+
+        // New format: associative array with AllowedFilter/array/FilterSet
+        $extracted = [];
+
+        foreach ($filterInput as $field => $value) {
+            if (!array_key_exists($field, $this->allowedFilters)) {
+                continue;
+            }
+
+            $allowedOperators = $this->resolveAllowedOperators($field);
+
+            if (is_array($value)) {
+                foreach ($value as $operatorKey => $operatorValue) {
+                    $operator = AllowedFilter::tryFrom((string) $operatorKey);
+                    if ($operator !== null && in_array($operator, $allowedOperators, true)) {
+                        $extracted[$field][$operator->value] = $operatorValue;
+                    }
+                }
+            } else {
+                if ($value !== '' && $value !== null) {
+                    $defaultOperator = $this->resolveDefaultOperator($field, $allowedOperators);
+                    $extracted[$field][$defaultOperator->value] = $value;
+                }
+            }
+        }
+
+        return $extracted;
+    }
+
+    private function extractFiltersLegacy(array $filterInput): array
+    {
         $result = [];
 
-        foreach ($filters as $field => $value) {
+        foreach ($filterInput as $field => $value) {
             if (!in_array($field, $this->allowedFilters, true)) {
                 continue;
             }
 
-            // Ignore empty/null filter values
             if ($value === null || $value === '') {
                 continue;
             }
 
-            // Ignore non-scalar filter values
             if (!is_scalar($value)) {
                 continue;
             }

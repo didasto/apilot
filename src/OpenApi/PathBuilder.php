@@ -7,6 +7,7 @@ namespace Didasto\Apilot\OpenApi;
 use Illuminate\Support\Str;
 use Didasto\Apilot\Attributes\OpenApiMeta;
 use Didasto\Apilot\Enums\AllowedFilter;
+use Didasto\Apilot\Filters\FilterSet;
 use Didasto\Apilot\Routing\RouteEntry;
 
 class PathBuilder
@@ -36,6 +37,20 @@ class PathBuilder
         $allowedFilters  = $this->getControllerProperty($entry->controllerClass, 'allowedFilters') ?? [];
         $allowedSorts    = $this->getControllerProperty($entry->controllerClass, 'allowedSorts') ?? [];
 
+        $storeRequestClass  = $this->getControllerProperty($entry->controllerClass, 'storeRequestClass');
+        $updateRequestClass = $this->getControllerProperty($entry->controllerClass, 'updateRequestClass');
+
+        $storeClass  = $storeRequestClass ?? $formRequestClass;
+        $updateClass = $updateRequestClass ?? $formRequestClass;
+
+        if ($storeClass !== null && $updateClass !== null && $storeClass === $updateClass) {
+            $storeSchemaRef  = $schemaName . 'Request';
+            $updateSchemaRef = $schemaName . 'Request';
+        } else {
+            $storeSchemaRef  = $storeClass !== null  ? $schemaName . 'StoreRequest'  : null;
+            $updateSchemaRef = $updateClass !== null ? $schemaName . 'UpdateRequest' : null;
+        }
+
         $base = ['tags' => [$tag]];
 
         if ($deprecated) {
@@ -55,13 +70,13 @@ class PathBuilder
                     $collectionOps['get'] = $this->buildIndexOp($entry, $schemaName, $base, $allowedFilters, $allowedSorts);
                     break;
                 case 'store':
-                    $collectionOps['post'] = $this->buildStoreOp($entry, $schemaName, $base, $formRequestClass);
+                    $collectionOps['post'] = $this->buildStoreOp($entry, $schemaName, $base, $storeSchemaRef);
                     break;
                 case 'show':
                     $itemOps['get'] = $this->buildShowOp($entry, $schemaName, $base);
                     break;
                 case 'update':
-                    $itemOps['put'] = $this->buildUpdateOp($entry, $schemaName, $base, $formRequestClass);
+                    $itemOps['put'] = $this->buildUpdateOp($entry, $schemaName, $base, $updateSchemaRef);
                     break;
                 case 'destroy':
                     $itemOps['delete'] = $this->buildDestroyOp($entry, $schemaName, $base);
@@ -178,14 +193,14 @@ class PathBuilder
     }
 
     /** @return array<string, mixed> */
-    protected function buildStoreOp(RouteEntry $entry, string $schemaName, array $base, ?string $formRequestClass): array
+    protected function buildStoreOp(RouteEntry $entry, string $schemaName, array $base, ?string $storeSchemaRef): array
     {
         $singularName = Str::singular(Str::studly($entry->resourceName));
 
         return array_merge($base, [
             'summary'     => 'Create a new ' . $singularName,
             'operationId' => $entry->resourceName . '.store',
-            'requestBody' => $this->buildRequestBody($schemaName, $formRequestClass),
+            'requestBody' => $this->buildRequestBody($storeSchemaRef),
             'responses'   => [
                 '201' => [
                     'description' => 'Created ' . $singularName . ' resource',
@@ -206,7 +221,7 @@ class PathBuilder
     }
 
     /** @return array<string, mixed> */
-    protected function buildUpdateOp(RouteEntry $entry, string $schemaName, array $base, ?string $formRequestClass): array
+    protected function buildUpdateOp(RouteEntry $entry, string $schemaName, array $base, ?string $updateSchemaRef): array
     {
         $singularName = Str::singular(Str::studly($entry->resourceName));
 
@@ -221,7 +236,7 @@ class PathBuilder
                     'schema'   => ['type' => 'string'],
                 ],
             ],
-            'requestBody' => $this->buildRequestBody($schemaName, $formRequestClass),
+            'requestBody' => $this->buildRequestBody($updateSchemaRef),
             'responses'   => [
                 '200' => [
                     'description' => 'Updated ' . $singularName . ' resource',
@@ -266,39 +281,107 @@ class PathBuilder
     }
 
     /**
-     * @param array<string, AllowedFilter>|array<int, string> $allowedFilters
+     * @param array<string, AllowedFilter|array<int, AllowedFilter>|class-string>|array<int, string> $allowedFilters
      * @return array<int, array<string, mixed>>
      */
     protected function buildFilterParameters(array $allowedFilters): array
     {
         $params = [];
 
-        foreach ($allowedFilters as $field => $filterType) {
+        foreach ($allowedFilters as $field => $filterConfig) {
             if (is_int($field)) {
-                // ServiceCrudController-Stil: ['name', 'slug']
-                $fieldName   = $filterType;
-                $description = 'Filter by ' . $fieldName;
-            } else {
-                // ModelCrudController-Stil: ['status' => AllowedFilter::EXACT]
-                $fieldName   = $field;
-                $description = match ($filterType) {
-                    AllowedFilter::EXACT   => 'Filter by ' . $fieldName . ' (exact match)',
-                    AllowedFilter::PARTIAL => 'Filter by ' . $fieldName . ' (partial match / contains)',
-                    AllowedFilter::SCOPE   => 'Filter by ' . $fieldName . ' (scope filter)',
-                    default                => 'Filter by ' . $fieldName,
-                };
+                // Legacy ServiceCrudController-Stil: ['name', 'slug']
+                $params[] = [
+                    'name'        => 'filter[' . $filterConfig . ']',
+                    'in'          => 'query',
+                    'required'    => false,
+                    'description' => 'Filter by ' . $filterConfig,
+                    'schema'      => ['type' => 'string'],
+                ];
+                continue;
             }
 
-            $params[] = [
-                'name'        => 'filter[' . $fieldName . ']',
-                'in'          => 'query',
-                'required'    => false,
-                'description' => $description,
-                'schema'      => ['type' => 'string'],
-            ];
+            $operators = $this->resolveOperatorsForOpenApi($filterConfig);
+
+            if (count($operators) === 1) {
+                // Einzelner Operator → Legacy-Stil ohne Operator-Suffix
+                $operator = $operators[0];
+                $params[] = [
+                    'name'        => 'filter[' . $field . ']',
+                    'in'          => 'query',
+                    'required'    => false,
+                    'description' => 'Filter by ' . $field . ' (' . $this->operatorDescription($operator) . ')',
+                    'schema'      => ['type' => 'string'],
+                ];
+            } else {
+                // Mehrere Operatoren → Operator-Suffix pro Operator
+                foreach ($operators as $operator) {
+                    $param = [
+                        'name'        => 'filter[' . $field . '][' . $operator->queryKey() . ']',
+                        'in'          => 'query',
+                        'required'    => false,
+                        'description' => 'Filter by ' . $field . ' (' . $this->operatorDescription($operator) . ')',
+                        'schema'      => ['type' => 'string'],
+                    ];
+
+                    if ($operator === AllowedFilter::IN || $operator === AllowedFilter::NOT_IN) {
+                        $param['schema']['example'] = '1,2,3';
+                    } elseif ($operator === AllowedFilter::BETWEEN || $operator === AllowedFilter::NOT_BETWEEN) {
+                        $param['schema']['example'] = '2025-01-01,2025-12-31';
+                    }
+
+                    $params[] = $param;
+                }
+            }
         }
 
         return $params;
+    }
+
+    /**
+     * Löst die Operatoren für einen Filter-Config-Wert auf (für OpenAPI-Generierung).
+     *
+     * @return array<int, AllowedFilter>
+     */
+    private function resolveOperatorsForOpenApi(mixed $filterConfig): array
+    {
+        if ($filterConfig instanceof AllowedFilter) {
+            return [$filterConfig];
+        }
+
+        if (is_string($filterConfig) && class_exists($filterConfig) && is_subclass_of($filterConfig, FilterSet::class)) {
+            return (new $filterConfig())->filters();
+        }
+
+        if (is_array($filterConfig)) {
+            return $filterConfig;
+        }
+
+        return [];
+    }
+
+    /**
+     * Gibt eine lesbare Beschreibung für einen Operator zurück.
+     */
+    private function operatorDescription(AllowedFilter $operator): string
+    {
+        return match ($operator) {
+            AllowedFilter::EXACT, AllowedFilter::EQUALS     => 'equals',
+            AllowedFilter::NOT_EQUALS                        => 'not equals',
+            AllowedFilter::IN                                => 'in list, comma-separated',
+            AllowedFilter::NOT_IN                            => 'not in list, comma-separated',
+            AllowedFilter::GT                                => 'greater than',
+            AllowedFilter::LT                                => 'less than',
+            AllowedFilter::GTE                               => 'greater than or equal',
+            AllowedFilter::LTE                               => 'less than or equal',
+            AllowedFilter::PARTIAL, AllowedFilter::LIKE      => 'contains (partial match)',
+            AllowedFilter::NOT_LIKE                          => 'does not contain',
+            AllowedFilter::BETWEEN                           => 'between two values, comma-separated',
+            AllowedFilter::NOT_BETWEEN                       => 'not between two values, comma-separated',
+            AllowedFilter::IS_NULL                           => 'is null',
+            AllowedFilter::IS_NOT_NULL                       => 'is not null',
+            AllowedFilter::SCOPE                             => 'scope filter',
+        };
     }
 
     /**
@@ -340,10 +423,10 @@ class PathBuilder
     /**
      * @return array<string, mixed>
      */
-    protected function buildRequestBody(string $schemaName, ?string $formRequestClass): array
+    protected function buildRequestBody(?string $schemaRefName): array
     {
-        if ($formRequestClass !== null) {
-            $schema = ['$ref' => '#/components/schemas/' . $schemaName . 'Request'];
+        if ($schemaRefName !== null) {
+            $schema = ['$ref' => '#/components/schemas/' . $schemaRefName];
         } else {
             $schema = ['type' => 'object', 'additionalProperties' => true];
         }

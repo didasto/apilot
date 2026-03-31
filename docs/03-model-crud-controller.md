@@ -18,14 +18,77 @@ If `$model` is not set or does not point to an existing class, a `LogicException
 
 ### `$formRequestClass`
 
-A `FormRequest` class used for validating `store` and `update` requests.
+A `FormRequest` class used for validating both `store` and `update` requests when no action-specific class is set.
 
 ```php
 protected ?string $formRequestClass = \App\Http\Requests\PostRequest::class;
 ```
 
 - **When set:** The request is validated against the FormRequest's `rules()`. A failed validation returns 422 with structured error messages.
-- **When `null` (default):** No validation is applied; `request()->all()` is used as the data payload. Suitable for quick prototypes or when validation is handled elsewhere.
+- **When `null` (default):** No validation is applied; `request()->all()` is used as the data payload.
+
+### `$storeRequestClass`
+
+A `FormRequest` class used exclusively for `store` (POST) requests. Takes priority over `$formRequestClass` for the store action.
+
+```php
+protected ?string $storeRequestClass = \App\Http\Requests\StorePostRequest::class;
+```
+
+### `$updateRequestClass`
+
+A `FormRequest` class used exclusively for `update` (PUT) requests. Takes priority over `$formRequestClass` for the update action.
+
+```php
+protected ?string $updateRequestClass = \App\Http\Requests\UpdatePostRequest::class;
+```
+
+#### Priority / Fallback Logic
+
+| Action | Uses |
+|--------|------|
+| `store` | `$storeRequestClass` → `$formRequestClass` → `null` (no validation) |
+| `update` | `$updateRequestClass` → `$formRequestClass` → `null` (no validation) |
+
+**Example — different rules for store and update:**
+
+```php
+class PostController extends ModelCrudController
+{
+    protected string $model = Post::class;
+
+    // Store requires all fields
+    protected ?string $storeRequestClass = StorePostRequest::class;
+
+    // Update allows partial changes only
+    protected ?string $updateRequestClass = UpdatePostRequest::class;
+}
+```
+
+```php
+class StorePostRequest extends FormRequest
+{
+    public function rules(): array
+    {
+        return [
+            'title'  => 'required|string|max:255',
+            'body'   => 'required|string',
+            'status' => 'required|string|in:draft,published,archived',
+        ];
+    }
+}
+
+class UpdatePostRequest extends FormRequest
+{
+    public function rules(): array
+    {
+        return [
+            'body'   => 'sometimes|string',
+            'status' => 'sometimes|string|in:draft,published,archived',
+        ];
+    }
+}
+```
 
 ### `$resourceClass`
 

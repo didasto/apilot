@@ -87,12 +87,75 @@ php artisan apilot:generate-spec --stdout \
 For each registered route entry, Apilot generates:
 
 - **Path items** for each active action (index, show, store, update, destroy)
-- **Request schemas** derived from your `$formRequestClass` validation rules
+- **Request schemas** derived from your FormRequest validation rules (see below)
 - **Response schemas** derived from your `$resourceClass` (or a generic object if not set)
 - **Path parameters** (e.g., `{id}` for show/update/destroy)
 - **Query parameters** for filtering, sorting, and pagination on `index`
 - **Common schemas**: `PaginationMeta`, `PaginationLinks`, `ErrorResponse`, `ValidationErrorResponse`
 - **Security schemes** based on `openapi.default_security` config
+
+## Request Schemas
+
+### Single FormRequest (`$formRequestClass`)
+
+When only `$formRequestClass` is set, both `store` and `update` share one schema:
+
+```json
+{
+    "components": {
+        "schemas": {
+            "PostRequest": { "type": "object", "properties": { ... } }
+        }
+    }
+}
+```
+
+### Separate Store and Update Schemas
+
+When `$storeRequestClass` and/or `$updateRequestClass` are set, separate schemas are generated:
+
+```php
+class PostController extends ModelCrudController
+{
+    protected ?string $storeRequestClass  = StorePostRequest::class;
+    protected ?string $updateRequestClass = UpdatePostRequest::class;
+}
+```
+
+Generated schemas:
+
+```json
+{
+    "components": {
+        "schemas": {
+            "PostStoreRequest": {
+                "type": "object",
+                "required": ["title", "body", "status"],
+                "properties": {
+                    "title":  { "type": "string", "maxLength": 255 },
+                    "body":   { "type": "string" },
+                    "status": { "type": "string", "enum": ["draft", "published", "archived"] }
+                }
+            },
+            "PostUpdateRequest": {
+                "type": "object",
+                "properties": {
+                    "body":   { "type": "string" },
+                    "status": { "type": "string", "enum": ["draft", "published", "archived"] }
+                }
+            }
+        }
+    }
+}
+```
+
+`POST /api/posts` references `PostStoreRequest`, `PUT /api/posts/{id}` references `PostUpdateRequest`.
+
+If `$storeRequestClass === $updateRequestClass`, only one schema (`PostRequest`) is generated.
+
+### Required Fields
+
+Fields with the `required` validation rule appear in the OpenAPI `required` array. Fields with `sometimes`, `required_if`, `required_unless`, `required_with`, `required_without`, or no required rule do not.
 
 ## Spec Info Block
 

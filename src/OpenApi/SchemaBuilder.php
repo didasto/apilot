@@ -63,6 +63,36 @@ class SchemaBuilder
     }
 
     /**
+     * Ermittelt die Schema-Namen und -Klassen für eine Resource.
+     *
+     * @return array<string, string> — Key = Schema-Name, Value = FormRequest-Klassenname
+     */
+    public function resolveRequestSchemas(
+        string $resourceName,
+        ?string $formRequestClass,
+        ?string $storeRequestClass,
+        ?string $updateRequestClass,
+    ): array {
+        $schemas = [];
+
+        $storeClass  = $storeRequestClass ?? $formRequestClass;
+        $updateClass = $updateRequestClass ?? $formRequestClass;
+
+        if ($storeClass !== null && $updateClass !== null && $storeClass === $updateClass) {
+            $schemas["{$resourceName}Request"] = $storeClass;
+        } else {
+            if ($storeClass !== null) {
+                $schemas["{$resourceName}StoreRequest"] = $storeClass;
+            }
+            if ($updateClass !== null) {
+                $schemas["{$resourceName}UpdateRequest"] = $updateClass;
+            }
+        }
+
+        return $schemas;
+    }
+
+    /**
      * Erzeugt ein OpenAPI-Schema aus einer Resource-Klasse.
      *
      * @param string      $resourceClass

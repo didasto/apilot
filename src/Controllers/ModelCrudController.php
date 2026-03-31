@@ -86,7 +86,7 @@ abstract class ModelCrudController extends BaseCrudController
     {
         $this->resolveModel();
 
-        $validated = $this->resolveFormRequest();
+        $validated = $this->resolveFormRequest('store');
         $validated = $this->beforeStore($validated, $request);
         $item = ($this->model)::create($validated);
         $item = $this->afterStore($item, $request);
@@ -103,7 +103,7 @@ abstract class ModelCrudController extends BaseCrudController
         $this->resolveModel();
 
         $item = $this->findOrFail($id);
-        $validated = $this->resolveFormRequest();
+        $validated = $this->resolveFormRequest('update');
         $validated = $this->beforeUpdate($item, $validated, $request);
         $item->update($validated);
         $item = $this->afterUpdate($item, $request);

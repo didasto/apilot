@@ -62,6 +62,43 @@ new PaginatedResult(
 
 `lastPage()` is a computed method: `(int) max(1, ceil($total / $perPage))`.
 
+## AbstractCrudService
+
+Instead of implementing `CrudServiceInterface` directly (which requires all five methods), extend `AbstractCrudService` to provide default "Not Implemented" responses for methods you don't need.
+
+```php
+use Didasto\Apilot\Services\AbstractCrudService;
+
+class ExternalProductService extends AbstractCrudService
+{
+    public function list(array $filters, array $sorting, PaginationParams $pagination): PaginatedResult
+    {
+        // Implement only what you need
+    }
+
+    public function find(int|string $id): mixed
+    {
+        // Implement only what you need
+    }
+
+    // create(), update(), delete() are NOT overridden.
+    // If called, they automatically return a 501 Not Implemented JSON response.
+}
+```
+
+When an unimplemented method is called, the response is:
+
+```json
+{
+    "error": {
+        "message": "Method App\\Services\\ExternalProductService::create is not implemented.",
+        "status": 501
+    }
+}
+```
+
+`AbstractCrudService` implements `CrudServiceInterface`, so it is fully compatible with any code that type-hints the interface.
+
 ## Controller Properties
 
 Same as `ModelCrudController`:
@@ -69,7 +106,9 @@ Same as `ModelCrudController`:
 | Property | Type | Default | Description |
 |----------|------|---------|-------------|
 | `$serviceClass` | `string` | *(required)* | Fully-qualified service class name |
-| `$formRequestClass` | `?string` | `null` | FormRequest for store/update validation |
+| `$formRequestClass` | `?string` | `null` | FormRequest for store/update validation (fallback) |
+| `$storeRequestClass` | `?string` | `null` | FormRequest for store only (overrides `$formRequestClass`) |
+| `$updateRequestClass` | `?string` | `null` | FormRequest for update only (overrides `$formRequestClass`) |
 | `$resourceClass` | `?string` | `null` | JsonResource for response transformation |
 | `$allowedFilters` | `array` | `[]` | List of filterable field names |
 | `$allowedSorts` | `array` | `[]` | List of sortable field names |

@@ -16,22 +16,32 @@ abstract class BaseCrudController extends Controller
 
     protected ?string $formRequestClass = null;
 
+    protected ?string $storeRequestClass = null;
+
+    protected ?string $updateRequestClass = null;
+
     protected ?string $resourceClass = null;
 
-    protected function resolveFormRequest(): array
+    protected function resolveFormRequest(string $action = ''): array
     {
-        if ($this->formRequestClass === null) {
+        $requestClass = match ($action) {
+            'store'  => $this->storeRequestClass ?? $this->formRequestClass,
+            'update' => $this->updateRequestClass ?? $this->formRequestClass,
+            default  => $this->formRequestClass,
+        };
+
+        if ($requestClass === null) {
             return request()->all();
         }
 
-        if (!class_exists($this->formRequestClass)) {
+        if (!class_exists($requestClass)) {
             throw new LogicException(
-                sprintf('FormRequest class %s does not exist.', $this->formRequestClass)
+                sprintf('FormRequest class %s does not exist.', $requestClass)
             );
         }
 
         /** @var \Illuminate\Foundation\Http\FormRequest $formRequest */
-        $formRequest = app($this->formRequestClass);
+        $formRequest = app($requestClass);
 
         return $formRequest->validated();
     }

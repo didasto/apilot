@@ -91,10 +91,20 @@ class OpenApiGenerator
         foreach ($this->registry->all() as $entry) {
             $schemaName = Str::singular(Str::studly($entry->resourceName));
 
-            // Request-Schema aus FormRequest
-            $formRequestClass = $this->getControllerProperty($entry->controllerClass, 'formRequestClass');
-            if ($formRequestClass !== null) {
-                $schemas[$schemaName . 'Request'] = $this->schemaBuilder->fromFormRequest($formRequestClass);
+            // Request-Schemas aus FormRequests
+            $formRequestClass   = $this->getControllerProperty($entry->controllerClass, 'formRequestClass');
+            $storeRequestClass  = $this->getControllerProperty($entry->controllerClass, 'storeRequestClass');
+            $updateRequestClass = $this->getControllerProperty($entry->controllerClass, 'updateRequestClass');
+
+            $requestSchemas = $this->schemaBuilder->resolveRequestSchemas(
+                $schemaName,
+                $formRequestClass,
+                $storeRequestClass,
+                $updateRequestClass,
+            );
+
+            foreach ($requestSchemas as $name => $class) {
+                $schemas[$name] = $this->schemaBuilder->fromFormRequest($class);
             }
 
             // Response-Schema aus Resource

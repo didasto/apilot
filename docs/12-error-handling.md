@@ -94,6 +94,28 @@ Content-Type: application/json
 
 This is Laravel's standard validation response format. Apilot does not modify it.
 
+## 501 — Not Implemented
+
+Returned when a service method has not been implemented in an `AbstractCrudService` subclass and that endpoint is called.
+
+**Trigger:** A controller action calls a service method that throws `NotImplementedException` (the default in `AbstractCrudService`).
+
+**Response:**
+
+```json
+HTTP/1.1 501 Not Implemented
+Content-Type: application/json
+
+{
+    "error": {
+        "message": "Method App\\Services\\ProductService::create is not implemented.",
+        "status": 501
+    }
+}
+```
+
+**Implementation:** `NotImplementedException` is thrown by `AbstractCrudService` for any method that is not overridden, and renders itself via its `render()` method.
+
 ## 500 — Misconfiguration Exceptions
 
 These are thrown during development when the controller is misconfigured. They should never reach production.

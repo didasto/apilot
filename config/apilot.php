@@ -60,6 +60,32 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Auto-Discovery für #[ApiResource] Attribute
+    |--------------------------------------------------------------------------
+    */
+    'auto_discover' => [
+
+        /*
+        | Aktiviert das automatische Scannen von Controller-Verzeichnissen
+        | nach #[ApiResource] Attributen.
+        */
+        'enabled' => false,
+
+        /*
+        | Verzeichnisse die gescannt werden sollen.
+        | Jeder Eintrag ist ein Array mit 'directory' und 'namespace'.
+        */
+        'directories' => [
+            [
+                'directory' => null, // z.B. app_path('Http/Controllers/Api')
+                'namespace' => 'App\\Http\\Controllers\\Api',
+            ],
+        ],
+
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | OpenAPI Specification
     |--------------------------------------------------------------------------
     */
