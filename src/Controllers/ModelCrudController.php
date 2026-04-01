@@ -44,6 +44,19 @@ abstract class ModelCrudController extends BaseCrudController
         $paginator = $this->afterIndex($paginator, $request);
 
         $resourceClass = $this->resolveResourceClass();
+        $mode = $this->resolveWrapperMode();
+
+        if ($mode === 'laravel') {
+            // Let Laravel's JsonResource handle response formatting.
+            // transformResponse is still called (with empty data) so that hooks
+            // implementing side-effects (logging, events) are not skipped.
+            $this->transformResponse([], 'index', $request);
+
+            return $resourceClass::collection($paginator)
+                ->response()
+                ->setStatusCode($this->getStatusCode('index'));
+        }
+
         $items = collect($paginator->items())
             ->map(fn (Model $model) => (new $resourceClass($model))->resolve($request))
             ->all();
@@ -66,7 +79,17 @@ abstract class ModelCrudController extends BaseCrudController
 
         $normalizedData = $this->transformResponse($normalizedData, 'index', $request);
 
-        return new JsonResponse($this->wrapCollectionData($normalizedData), $this->getStatusCode('index'));
+        $itemsKey = match ($mode) {
+            'none'  => 'items',
+            'named' => $this->resolveWrapperKey(),
+            default => 'data',
+        };
+
+        return new JsonResponse([
+            $itemsKey => $normalizedData['items'] ?? [],
+            'meta'    => $normalizedData['meta'] ?? [],
+            'links'   => $normalizedData['links'] ?? [],
+        ], $this->getStatusCode('index'));
     }
 
     public function show(Request $request, int|string $id): JsonResponse
@@ -80,7 +103,7 @@ abstract class ModelCrudController extends BaseCrudController
         $resolved = (new $resourceClass($item))->resolve($request);
         $resolved = $this->transformResponse($resolved, 'show', $request);
 
-        return new JsonResponse($this->wrapItemData($resolved), $this->getStatusCode('show'));
+        return $this->buildItemResponse($item, $resolved, $resourceClass, 'show', $request);
     }
 
     public function store(Request $request): JsonResponse
@@ -96,7 +119,7 @@ abstract class ModelCrudController extends BaseCrudController
         $resolved = (new $resourceClass($item))->resolve($request);
         $resolved = $this->transformResponse($resolved, 'store', $request);
 
-        return new JsonResponse($this->wrapItemData($resolved), $this->getStatusCode('store'));
+        return $this->buildItemResponse($item, $resolved, $resourceClass, 'store', $request);
     }
 
     public function update(Request $request, int|string $id): JsonResponse
@@ -113,7 +136,7 @@ abstract class ModelCrudController extends BaseCrudController
         $resolved = (new $resourceClass($item))->resolve($request);
         $resolved = $this->transformResponse($resolved, 'update', $request);
 
-        return new JsonResponse($this->wrapItemData($resolved), $this->getStatusCode('update'));
+        return $this->buildItemResponse($item, $resolved, $resourceClass, 'update', $request);
     }
 
     public function destroy(Request $request, int|string $id): JsonResponse

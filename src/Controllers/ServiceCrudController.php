@@ -45,7 +45,21 @@ abstract class ServiceCrudController extends BaseCrudController
         $normalizedData = $this->buildPaginatedResponse($result, $request);
         $normalizedData = $this->transformResponse($normalizedData, 'index', $request);
 
-        return new JsonResponse($this->wrapCollectionData($normalizedData), $this->getStatusCode('index'));
+        $mode = $this->resolveWrapperMode();
+
+        // ServiceCrudController always builds the response manually (no Eloquent paginator).
+        // In 'laravel' mode we simulate Laravel's default by using 'data' as the items key.
+        $itemsKey = match ($mode) {
+            'none'  => 'items',
+            'named' => $this->resolveWrapperKey(),
+            default => 'data',
+        };
+
+        return new JsonResponse([
+            $itemsKey => $normalizedData['items'] ?? [],
+            'meta'    => $normalizedData['meta'] ?? [],
+            'links'   => $normalizedData['links'] ?? [],
+        ], $this->getStatusCode('index'));
     }
 
     public function show(Request $request, int|string $id): JsonResponse
@@ -64,7 +78,7 @@ abstract class ServiceCrudController extends BaseCrudController
         $resolved = (new $resourceClass($item))->resolve($request);
         $resolved = $this->transformResponse($resolved, 'show', $request);
 
-        return new JsonResponse($this->wrapItemData($resolved), $this->getStatusCode('show'));
+        return $this->buildItemResponse($item, $resolved, $resourceClass, 'show', $request);
     }
 
     public function store(Request $request): JsonResponse
@@ -80,7 +94,7 @@ abstract class ServiceCrudController extends BaseCrudController
         $resolved = (new $resourceClass($item))->resolve($request);
         $resolved = $this->transformResponse($resolved, 'store', $request);
 
-        return new JsonResponse($this->wrapItemData($resolved), $this->getStatusCode('store'));
+        return $this->buildItemResponse($item, $resolved, $resourceClass, 'store', $request);
     }
 
     public function update(Request $request, int|string $id): JsonResponse
@@ -102,7 +116,7 @@ abstract class ServiceCrudController extends BaseCrudController
         $resolved = (new $resourceClass($item))->resolve($request);
         $resolved = $this->transformResponse($resolved, 'update', $request);
 
-        return new JsonResponse($this->wrapItemData($resolved), $this->getStatusCode('update'));
+        return $this->buildItemResponse($item, $resolved, $resourceClass, 'update', $request);
     }
 
     public function destroy(Request $request, int|string $id): JsonResponse
@@ -260,6 +274,12 @@ abstract class ServiceCrudController extends BaseCrudController
         return new PaginationParams($page, $perPage);
     }
 
+    /**
+     * Builds the normalized data array (items, meta, links) from a PaginatedResult.
+     * The actual response wrapping is handled by index() based on the wrapper mode.
+     *
+     * @return array{items: array<mixed>, meta: array<string, int>, links: array<string, string|null>}
+     */
     protected function buildPaginatedResponse(PaginatedResult $result, Request $request): array
     {
         $resourceClass = $this->resolveResourceClass();

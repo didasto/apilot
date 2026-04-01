@@ -53,19 +53,28 @@ return [
     |--------------------------------------------------------------------------
     | Response Wrapper
     |--------------------------------------------------------------------------
-    | Der Key, unter dem Daten im JSON-Response gewrapped werden.
     |
-    | 'data'   → { "data": { ... } }          (Default, Laravel-Standard)
-    | 'result' → { "result": { ... } }        (Custom Wrapper-Key)
-    | null     → { "id": 1, ... }             (Kein Wrapping für Single-Items)
-    |             { "items": [...], "meta": {...}, "links": {...} }
-    |             (Paginierte Responses nutzen "items" als Key)
+    | Steuert, wie Apilot die JSON-Responses formatiert.
+    | Drei Modi sind verfügbar:
     |
-    | HINWEIS: Diese Einstellung betrifft ausschließlich die Responses der
-    | Apilot-Controller (ModelCrudController und ServiceCrudController),
-    | nicht andere JsonResources in der Applikation.
+    | null     → Laravel Default. Apilot greift nicht ein.
+    |            Laravel's JsonResource bestimmt das Format (Standard: "data"-Wrapper).
+    |            Nutze diesen Modus wenn du Laravels Standard-Verhalten behalten
+    |            oder selbst JsonResource::wrap()/withoutWrapping() steuern willst.
+    |
+    | []       → Kein Wrapper. Single-Items werden direkt als JSON-Objekt zurückgegeben.
+    |            Paginierte Responses nutzen "items" als Key für die Collection.
+    |            Beispiel show:  { "id": 1, "title": "..." }
+    |            Beispiel index: { "items": [...], "meta": {...}, "links": {...} }
+    |
+    | 'string' → Named Wrapper. Der angegebene String wird als Wrapper-Key genutzt.
+    |            Beispiel 'data':   { "data": { "id": 1, ... } }
+    |            Beispiel 'result': { "result": { "id": 1, ... } }
+    |
+    | Error-Responses (404, 403, 422) werden nicht vom Wrapper beeinflusst.
+    |
     */
-    'response_wrapper' => 'data',
+    'response_wrapper' => null,
 
     /*
     |--------------------------------------------------------------------------

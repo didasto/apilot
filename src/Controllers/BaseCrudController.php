@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace Didasto\Apilot\Controllers;
 
 use Illuminate\Http\JsonResponse;
-use Illuminate\Http\Resources\Json\JsonResource;
+use Illuminate\Http\Request;
 use Illuminate\Routing\Controller;
 use LogicException;
 use Didasto\Apilot\Controllers\Concerns\HasCrudHooks;
@@ -60,27 +60,80 @@ abstract class BaseCrudController extends Controller
         return $this->resourceClass ?? DefaultResource::class;
     }
 
-    protected function wrapItemData(mixed $resolved): mixed
+    /**
+     * Determines the wrapper mode from config.
+     *
+     * Returns:
+     *   'laravel' — null config: let Laravel's JsonResource handle formatting
+     *   'none'    — [] config: no wrapper, paginated responses use 'items' key
+     *   'named'   — string config: wrap under the given key name
+     */
+    protected function resolveWrapperMode(): string
     {
         $wrapper = config('apilot.response_wrapper');
 
         if ($wrapper === null) {
-            return $resolved;
+            return 'laravel';
         }
 
-        return [$wrapper => $resolved];
+        if (is_array($wrapper) && empty($wrapper)) {
+            return 'none';
+        }
+
+        if (is_string($wrapper) && $wrapper !== '') {
+            return 'named';
+        }
+
+        // Fallback for invalid values (empty string, non-empty array, integer, etc.)
+        return 'laravel';
     }
 
-    protected function wrapCollectionData(mixed $normalizedData): array
+    /**
+     * Returns the configured wrapper key for 'named' mode, or null otherwise.
+     */
+    protected function resolveWrapperKey(): ?string
     {
-        $wrapper    = config('apilot.response_wrapper');
-        $wrapperKey = $wrapper ?? 'items';
-        $data       = is_array($normalizedData) ? $normalizedData : [];
+        $wrapper = config('apilot.response_wrapper');
 
-        return [
-            $wrapperKey => $data['items'] ?? [],
-            'meta'      => $data['meta'] ?? [],
-            'links'     => $data['links'] ?? [],
-        ];
+        if (is_string($wrapper) && $wrapper !== '') {
+            return $wrapper;
+        }
+
+        return null;
+    }
+
+    /**
+     * Builds a JsonResponse for a single item (show, store, update).
+     *
+     * Must be called AFTER transformResponse() so that $resolved already
+     * contains the hook-modified data.
+     *
+     * In 'laravel' mode the $resolved data is not used — Laravel's native
+     * resource response pipeline handles formatting (including the default
+     * "data" wrapper). In 'none' and 'named' modes $resolved is placed
+     * directly into the manually-built JSON response.
+     */
+    protected function buildItemResponse(
+        mixed  $item,
+        mixed  $resolved,
+        string $resourceClass,
+        string $action,
+        Request $request,
+    ): JsonResponse {
+        $mode = $this->resolveWrapperMode();
+
+        if ($mode === 'laravel') {
+            return (new $resourceClass($item))
+                ->response()
+                ->setStatusCode($this->getStatusCode($action));
+        }
+
+        $responseData = match ($mode) {
+            'none'  => $resolved,
+            'named' => [$this->resolveWrapperKey() => $resolved],
+            default => $resolved,
+        };
+
+        return new JsonResponse($responseData, $this->getStatusCode($action));
     }
 }

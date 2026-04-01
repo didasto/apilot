@@ -41,81 +41,77 @@ class ResponseWrapperTest extends TestCase
     }
 
     // =========================================================================
-    // Tests 1–2: Default wrapper 'data'
+    // Mode 1: null — Laravel Default
     // =========================================================================
 
-    public function testDefaultWrapperIsData(): void
-    {
-        config()->set('apilot.response_wrapper', 'data');
-
-        $response = $this->postJson('api/posts', [
-            'title' => 'Test Post',
-            'body'  => 'Some content',
-        ]);
-
-        $response->assertStatus(201);
-        $data = $response->json();
-        $this->assertArrayHasKey('data', $data);
-        $this->assertCount(1, array_keys($data));
-    }
-
-    public function testDefaultWrapperOnIndex(): void
-    {
-        config()->set('apilot.response_wrapper', 'data');
-
-        $response = $this->getJson('api/posts');
-
-        $response->assertStatus(200);
-        $data = $response->json();
-        $this->assertArrayHasKey('data', $data);
-        $this->assertArrayHasKey('meta', $data);
-        $this->assertArrayHasKey('links', $data);
-        $this->assertIsArray($data['data']);
-    }
-
-    // =========================================================================
-    // Tests 3–4: Custom wrapper key 'result'
-    // =========================================================================
-
-    public function testCustomWrapperKey(): void
-    {
-        config()->set('apilot.response_wrapper', 'result');
-
-        $response = $this->postJson('api/posts', [
-            'title' => 'Test Post',
-            'body'  => 'Some content',
-        ]);
-
-        $response->assertStatus(201);
-        $data = $response->json();
-        $this->assertArrayHasKey('result', $data);
-        $this->assertArrayNotHasKey('data', $data);
-        $this->assertCount(1, array_keys($data));
-    }
-
-    public function testCustomWrapperKeyOnIndex(): void
-    {
-        config()->set('apilot.response_wrapper', 'result');
-
-        $response = $this->getJson('api/posts');
-
-        $response->assertStatus(200);
-        $data = $response->json();
-        $this->assertArrayHasKey('result', $data);
-        $this->assertArrayHasKey('meta', $data);
-        $this->assertArrayHasKey('links', $data);
-        $this->assertArrayNotHasKey('data', $data);
-        $this->assertIsArray($data['result']);
-    }
-
-    // =========================================================================
-    // Tests 5–10: null wrapper
-    // =========================================================================
-
-    public function testNullWrapperRemovesWrappingOnShow(): void
+    public function testNullWrapperShowReturnsLaravelDefault(): void
     {
         config()->set('apilot.response_wrapper', null);
-        $post = Post::factory()->create(['title' => 'Test Post']);
+        $post = Post::factory()->create(['title' => 'Post 1']);
+
+        $response = $this->getJson("api/posts/{$post->id}");
+
+        $response->assertStatus(200);
+        $data = $response->json();
+        $this->assertArrayHasKey('data', $data);
+        $this->assertEquals($post->id, $data['data']['id']);
+    }
+
+    public function testNullWrapperIndexReturnsLaravelDefault(): void
+    {
+        config()->set('apilot.response_wrapper', null);
+        Post::factory()->count(5)->create();
+
+        $response = $this->getJson('api/posts');
+
+        $response->assertStatus(200);
+        $data = $response->json();
+        $this->assertArrayHasKey('data', $data);
+        $this->assertArrayHasKey('links', $data);
+        $this->assertArrayHasKey('meta', $data);
+        $this->assertIsArray($data['data']);
+        $this->assertCount(5, $data['data']);
+    }
+
+    public function testNullWrapperStoreReturnsLaravelDefault(): void
+    {
+        config()->set('apilot.response_wrapper', null);
+
+        $response = $this->postJson('api/posts', [
+            'title' => 'New Post',
+            'body'  => 'Content',
+        ]);
+
+        $response->assertStatus(201);
+        $data = $response->json();
+        $this->assertArrayHasKey('data', $data);
+        $this->assertEquals('New Post', $data['data']['title']);
+    }
+
+    public function testNullWrapperUpdateReturnsLaravelDefault(): void
+    {
+        config()->set('apilot.response_wrapper', null);
+        $post = Post::factory()->create();
+
+        $response = $this->putJson("api/posts/{$post->id}", [
+            'title'  => 'Updated',
+            'status' => 'draft',
+        ]);
+
+        $response->assertStatus(200);
+        $data = $response->json();
+        $this->assertArrayHasKey('data', $data);
+        $this->assertEquals('Updated', $data['data']['title']);
+    }
+
+    // =========================================================================
+    // Mode 2: [] — No Wrapper
+    // =========================================================================
+
+    public function testEmptyArrayWrapperShowReturnsUnwrapped(): void
+    {
+        config()->set('apilot.response_wrapper', []);
+        $post = Post::factory()->create(['title' => 'Post 1']);
 
         $response = $this->getJson("api/posts/{$post->id}");
 
@@ -127,13 +123,13 @@ class ResponseWrapperTest extends TestCase
         $this->assertEquals($post->id, $data['id']);
     }
 
-    public function testNullWrapperRemovesWrappingOnStore(): void
+    public function testEmptyArrayWrapperStoreReturnsUnwrapped(): void
     {
-        config()->set('apilot.response_wrapper', null);
+        config()->set('apilot.response_wrapper', []);
 
         $response = $this->postJson('api/posts', [
             'title' => 'New Post',
-            'body'  => 'Some content',
+            'body'  => 'Content',
         ]);
 
         $response->assertStatus(201);
@@ -144,9 +140,9 @@ class ResponseWrapperTest extends TestCase
         $this->assertEquals('New Post', $data['title']);
     }
 
-    public function testNullWrapperRemovesWrappingOnUpdate(): void
+    public function testEmptyArrayWrapperUpdateReturnsUnwrapped(): void
     {
-        config()->set('apilot.response_wrapper', null);
+        config()->set('apilot.response_wrapper', []);
         $post = Post::factory()->create();
 
         $response = $this->putJson("api/posts/{$post->id}", [
@@ -161,9 +157,10 @@ class ResponseWrapperTest extends TestCase
         $this->assertEquals('Updated Post', $data['title']);
     }
 
-    public function testNullWrapperUsesItemsKeyOnIndex(): void
+    public function testEmptyArrayWrapperIndexUsesItemsKey(): void
     {
-        config()->set('apilot.response_wrapper', null);
+        config()->set('apilot.response_wrapper', []);
+        Post::factory()->count(5)->create();
 
         $response = $this->getJson('api/posts');
 
@@ -176,9 +173,23 @@ class ResponseWrapperTest extends TestCase
         $this->assertIsArray($data['items']);
     }
 
-    public function testNullWrapperIndexMetaIsCorrect(): void
+    public function testEmptyArrayWrapperIndexItemsContainsPosts(): void
     {
-        config()->set('apilot.response_wrapper', null);
+        config()->set('apilot.response_wrapper', []);
+        Post::factory()->count(3)->create();
+
+        $response = $this->getJson('api/posts');
+
+        $response->assertStatus(200);
+        $data = $response->json();
+        $this->assertCount(3, $data['items']);
+        $this->assertArrayHasKey('id', $data['items'][0]);
+        $this->assertArrayHasKey('title', $data['items'][0]);
+    }
+
+    public function testEmptyArrayWrapperIndexMetaIsCorrect(): void
+    {
+        config()->set('apilot.response_wrapper', []);
         Post::factory()->count(20)->create();
 
         $response = $this->getJson('api/posts?per_page=5');
@@ -190,9 +201,9 @@ class ResponseWrapperTest extends TestCase
         $response->assertJsonPath('meta.current_page', 1);
     }
 
-    public function testNullWrapperIndexLinksAreCorrect(): void
+    public function testEmptyArrayWrapperIndexLinksAreCorrect(): void
     {
-        config()->set('apilot.response_wrapper', null);
+        config()->set('apilot.response_wrapper', []);
         Post::factory()->count(20)->create();
 
         $response = $this->getJson('api/posts?per_page=5&page=2');
@@ -202,30 +213,308 @@ class ResponseWrapperTest extends TestCase
         $this->assertNotNull($response->json('links.next'));
     }
 
-    // =========================================================================
-    // Test 11: Destroy unaffected by wrapper
-    // =========================================================================
-
-    public function testDestroyResponseUnaffectedByWrapper(): void
+    public function testEmptyArrayWrapperIndexPage1HasNoPrev(): void
     {
-        foreach ([null, 'data', 'result'] as $wrapper) {
+        config()->set('apilot.response_wrapper', []);
+        Post::factory()->count(20)->create();
+
+        $response = $this->getJson('api/posts?per_page=5&page=1');
+
+        $response->assertStatus(200);
+        $this->assertNull($response->json('links.prev'));
+    }
+
+    public function testEmptyArrayWrapperIndexLastPageHasNoNext(): void
+    {
+        config()->set('apilot.response_wrapper', []);
+        Post::factory()->count(10)->create();
+
+        $response = $this->getJson('api/posts?per_page=5&page=2');
+
+        $response->assertStatus(200);
+        $this->assertNull($response->json('links.next'));
+    }
+
+    // =========================================================================
+    // Mode 3: 'string' — Named Wrapper
+    // =========================================================================
+
+    public function testStringWrapperDataShowWrapsInData(): void
+    {
+        config()->set('apilot.response_wrapper', 'data');
+        $post = Post::factory()->create();
+
+        $response = $this->getJson("api/posts/{$post->id}");
+
+        $response->assertStatus(200);
+        $data = $response->json();
+        $this->assertArrayHasKey('data', $data);
+        $this->assertEquals($post->id, $data['data']['id']);
+    }
+
+    public function testStringWrapperDataIndexWrapsInData(): void
+    {
+        config()->set('apilot.response_wrapper', 'data');
+        Post::factory()->count(3)->create();
+
+        $response = $this->getJson('api/posts');
+
+        $response->assertStatus(200);
+        $data = $response->json();
+        $this->assertArrayHasKey('data', $data);
+        $this->assertArrayHasKey('meta', $data);
+        $this->assertArrayHasKey('links', $data);
+        $this->assertIsArray($data['data']);
+    }
+
+    public function testStringWrapperResultShowWrapsInResult(): void
+    {
+        config()->set('apilot.response_wrapper', 'result');
+        $post = Post::factory()->create();
+
+        $response = $this->getJson("api/posts/{$post->id}");
+
+        $response->assertStatus(200);
+        $data = $response->json();
+        $this->assertArrayHasKey('result', $data);
+        $this->assertArrayNotHasKey('data', $data);
+        $this->assertEquals($post->id, $data['result']['id']);
+    }
+
+    public function testStringWrapperResultIndexWrapsInResult(): void
+    {
+        config()->set('apilot.response_wrapper', 'result');
+        Post::factory()->count(3)->create();
+
+        $response = $this->getJson('api/posts');
+
+        $response->assertStatus(200);
+        $data = $response->json();
+        $this->assertArrayHasKey('result', $data);
+        $this->assertArrayHasKey('meta', $data);
+        $this->assertArrayHasKey('links', $data);
+        $this->assertArrayNotHasKey('data', $data);
+        $this->assertIsArray($data['result']);
+    }
+
+    public function testStringWrapperResultStoreWrapsInResult(): void
+    {
+        config()->set('apilot.response_wrapper', 'result');
+
+        $response = $this->postJson('api/posts', [
+            'title' => 'New Post',
+            'body'  => 'Content',
+        ]);
+
+        $response->assertStatus(201);
+        $data = $response->json();
+        $this->assertArrayHasKey('result', $data);
+        $this->assertArrayNotHasKey('data', $data);
+    }
+
+    public function testStringWrapperResultUpdateWrapsInResult(): void
+    {
+        config()->set('apilot.response_wrapper', 'result');
+        $post = Post::factory()->create();
+
+        $response = $this->putJson("api/posts/{$post->id}", [
+            'title'  => 'Updated',
+            'status' => 'draft',
+        ]);
+
+        $response->assertStatus(200);
+        $data = $response->json();
+        $this->assertArrayHasKey('result', $data);
+        $this->assertArrayNotHasKey('data', $data);
+    }
+
+    public function testStringWrapperPayloadShowWrapsInPayload(): void
+    {
+        config()->set('apilot.response_wrapper', 'payload');
+        $post = Post::factory()->create();
+
+        $response = $this->getJson("api/posts/{$post->id}");
+
+        $response->assertStatus(200);
+        $data = $response->json();
+        $this->assertArrayHasKey('payload', $data);
+        $this->assertArrayNotHasKey('data', $data);
+    }
+
+    // =========================================================================
+    // Destroy — unaffected by all modes
+    // =========================================================================
+
+    public function testDestroyUnaffectedByNullWrapper(): void
+    {
+        config()->set('apilot.response_wrapper', null);
+        $post = Post::factory()->create();
+
+        $response = $this->deleteJson("api/posts/{$post->id}");
+
+        $response->assertStatus(204);
+        $this->assertEmpty($response->getContent());
+    }
+
+    public function testDestroyUnaffectedByEmptyArrayWrapper(): void
+    {
+        config()->set('apilot.response_wrapper', []);
+        $post = Post::factory()->create();
+
+        $response = $this->deleteJson("api/posts/{$post->id}");
+
+        $response->assertStatus(204);
+        $this->assertEmpty($response->getContent());
+    }
+
+    public function testDestroyUnaffectedByStringWrapper(): void
+    {
+        config()->set('apilot.response_wrapper', 'result');
+        $post = Post::factory()->create();
+
+        $response = $this->deleteJson("api/posts/{$post->id}");
+
+        $response->assertStatus(204);
+        $this->assertEmpty($response->getContent());
+    }
+
+    // =========================================================================
+    // Error responses — unaffected by all modes
+    // =========================================================================
+
+    public function test404UnaffectedByEmptyArrayWrapper(): void
+    {
+        config()->set('apilot.response_wrapper', []);
+
+        $response = $this->getJson('api/posts/99999');
+
+        $response->assertStatus(404);
+        $data = $response->json();
+        $this->assertArrayHasKey('error', $data);
+        $this->assertEquals(404, $data['error']['status']);
+    }
+
+    public function test404UnaffectedByStringWrapper(): void
+    {
+        config()->set('apilot.response_wrapper', 'result');
+
+        $response = $this->getJson('api/posts/99999');
+
+        $response->assertStatus(404);
+        $data = $response->json();
+        $this->assertArrayHasKey('error', $data);
+        $this->assertArrayNotHasKey('result', $data);
+    }
+
+    public function test422UnaffectedByEmptyArrayWrapper(): void
+    {
+        config()->set('apilot.response_wrapper', []);
+
+        $response = $this->postJson('api/posts', []);
+
+        $response->assertStatus(422);
+        $data = $response->json();
+        $this->assertArrayHasKey('message', $data);
+        $this->assertArrayHasKey('errors', $data);
+    }
+
+    public function test422UnaffectedByStringWrapper(): void
+    {
+        config()->set('apilot.response_wrapper', 'result');
+
+        $response = $this->postJson('api/posts', []);
+
+        $response->assertStatus(422);
+        $data = $response->json();
+        $this->assertArrayHasKey('message', $data);
+        $this->assertArrayHasKey('errors', $data);
+        $this->assertArrayNotHasKey('result', $data);
+    }
+
+    // =========================================================================
+    // Hooks
+    // =========================================================================
+
+    public function testHooksWorkWithEmptyArrayWrapper(): void
+    {
+        config()->set('apilot.response_wrapper', []);
+        HookedPostController::resetHooks();
+
+        $response = $this->postJson('api/hooked-posts', [
+            'title' => 'Test Post',
+            'body'  => 'Content',
+        ]);
+
+        $response->assertStatus(201);
+        $this->assertContains('beforeStore', HookedPostController::$hooksCalled);
+        $this->assertContains('afterStore', HookedPostController::$hooksCalled);
+        $this->assertContains('transformResponse:store', HookedPostController::$hooksCalled);
+
+        $data = $response->json();
+        $this->assertArrayHasKey('id', $data);
+        $this->assertArrayNotHasKey('data', $data);
+    }
+
+    public function testHooksWorkWithNamedWrapper(): void
+    {
+        config()->set('apilot.response_wrapper', 'result');
+        HookedPostController::resetHooks();
+
+        $response = $this->postJson('api/hooked-posts', [
+            'title' => 'Test Post',
+            'body'  => 'Content',
+        ]);
+
+        $response->assertStatus(201);
+        $this->assertContains('beforeStore', HookedPostController::$hooksCalled);
+        $this->assertContains('afterStore', HookedPostController::$hooksCalled);
+        $this->assertContains('transformResponse:store', HookedPostController::$hooksCalled);
+
+        $data = $response->json();
+        $this->assertArrayHasKey('result', $data);
+        $this->assertArrayNotHasKey('data', $data);
+    }
+
+    public function testTransformResponseHookCalledForAllModes(): void
+    {
+        foreach ([null, [], 'result'] as $wrapper) {
+            HookedPostController::resetHooks();
             config()->set('apilot.response_wrapper', $wrapper);
-            $post = Post::factory()->create();
 
-            $response = $this->deleteJson("api/posts/{$post->id}");
+            $this->postJson('api/hooked-posts', [
+                'title' => 'Test Post',
+                'body'  => 'Content',
+            ]);
 
-            $response->assertStatus(204);
-            $this->assertEmpty($response->getContent(), "Destroy body should be empty for wrapper={$wrapper}");
+            $this->assertContains(
+                'transformResponse:store',
+                HookedPostController::$hooksCalled,
+                "transformResponse was not called for wrapper=" . json_encode($wrapper)
+            );
         }
     }
 
     // =========================================================================
-    // Tests 12–14: ServiceCrudController
+    // ServiceCrudController
     // =========================================================================
 
-    public function testWrapperWorksWithServiceController(): void
+    public function testServiceControllerEmptyArrayWrapperShow(): void
     {
-        config()->set('apilot.response_wrapper', null);
+        config()->set('apilot.response_wrapper', []);
+        $tag = app(TagService::class)->create(['name' => 'Laravel', 'slug' => 'laravel']);
+
+        $response = $this->getJson("api/tags/{$tag->id}");
+
+        $response->assertStatus(200);
+        $data = $response->json();
+        $this->assertArrayHasKey('id', $data);
+        $this->assertArrayHasKey('name', $data);
+        $this->assertArrayNotHasKey('data', $data);
+    }
+
+    public function testServiceControllerEmptyArrayWrapperIndex(): void
+    {
+        config()->set('apilot.response_wrapper', []);
 
         $response = $this->getJson('api/tags');
 
@@ -237,191 +526,154 @@ class ResponseWrapperTest extends TestCase
         $this->assertArrayNotHasKey('data', $data);
     }
 
-    public function testWrapperWorksWithServiceControllerShow(): void
+    public function testServiceControllerNamedWrapperShow(): void
     {
-        config()->set('apilot.response_wrapper', null);
-        $tag = app(TagService::class)->create(['name' => 'Test Tag', 'slug' => 'test-tag']);
+        config()->set('apilot.response_wrapper', 'result');
+        $tag = app(TagService::class)->create(['name' => 'Laravel', 'slug' => 'laravel']);
 
         $response = $this->getJson("api/tags/{$tag->id}");
 
         $response->assertStatus(200);
         $data = $response->json();
-        $this->assertArrayHasKey('id', $data);
-        $this->assertArrayHasKey('name', $data);
+        $this->assertArrayHasKey('result', $data);
         $this->assertArrayNotHasKey('data', $data);
+        $this->assertEquals($tag->id, $data['result']['id']);
     }
 
-    public function testCustomWrapperWorksWithServiceController(): void
+    public function testServiceControllerNamedWrapperIndex(): void
     {
         config()->set('apilot.response_wrapper', 'result');
 
-        $response = $this->postJson('api/tags', [
-            'name' => 'Test Tag',
-            'slug' => 'test-tag',
-        ]);
+        $response = $this->getJson('api/tags');
 
-        $response->assertStatus(201);
+        $response->assertStatus(200);
         $data = $response->json();
         $this->assertArrayHasKey('result', $data);
+        $this->assertArrayHasKey('meta', $data);
+        $this->assertArrayHasKey('links', $data);
         $this->assertArrayNotHasKey('data', $data);
+        $this->assertIsArray($data['result']);
     }
 
-    // =========================================================================
-    // Tests 15–16: Error responses unaffected
-    // =========================================================================
-
-    public function testWrapperDoesNotAffectErrorResponses(): void
+    public function testServiceControllerNullWrapperIndex(): void
     {
         config()->set('apilot.response_wrapper', null);
 
-        $response = $this->getJson('api/posts/99999');
+        $response = $this->getJson('api/tags');
 
-        $response->assertStatus(404);
+        $response->assertStatus(200);
         $data = $response->json();
-        $this->assertArrayHasKey('error', $data);
-        $this->assertEquals(404, $data['error']['status']);
-    }
-
-    public function testWrapperDoesNotAffectValidationErrors(): void
-    {
-        config()->set('apilot.response_wrapper', null);
-
-        $response = $this->postJson('api/posts', []); // missing required 'title'
-
-        $response->assertStatus(422);
-        $data = $response->json();
-        $this->assertArrayHasKey('errors', $data);
+        $this->assertArrayHasKey('data', $data);
+        $this->assertArrayHasKey('meta', $data);
+        $this->assertArrayHasKey('links', $data);
+        $this->assertIsArray($data['data']);
     }
 
     // =========================================================================
-    // Tests 17–19: Hooks
+    // OpenAPI Spec
     // =========================================================================
 
-    public function testHooksStillWorkWithNullWrapper(): void
-    {
-        config()->set('apilot.response_wrapper', null);
-        HookedPostController::resetHooks();
-
-        $response = $this->postJson('api/hooked-posts', [
-            'title' => 'Test Post',
-            'body'  => 'Some content',
-        ]);
-
-        $response->assertStatus(201);
-        $this->assertContains('beforeStore', HookedPostController::$hooksCalled);
-        $this->assertContains('afterStore', HookedPostController::$hooksCalled);
-        $this->assertContains('transformResponse:store', HookedPostController::$hooksCalled);
-
-        $data = $response->json();
-        $this->assertArrayHasKey('id', $data);
-        $this->assertArrayNotHasKey('data', $data);
-    }
-
-    public function testHooksStillWorkWithCustomWrapper(): void
-    {
-        config()->set('apilot.response_wrapper', 'result');
-        HookedPostController::resetHooks();
-
-        $response = $this->postJson('api/hooked-posts', [
-            'title' => 'Test Post',
-            'body'  => 'Some content',
-        ]);
-
-        $response->assertStatus(201);
-        $this->assertContains('beforeStore', HookedPostController::$hooksCalled);
-        $this->assertContains('afterStore', HookedPostController::$hooksCalled);
-        $this->assertContains('transformResponse:store', HookedPostController::$hooksCalled);
-
-        $data = $response->json();
-        $this->assertArrayHasKey('result', $data);
-        $this->assertArrayNotHasKey('data', $data);
-    }
-
-    public function testTransformResponseHookReceivesUnwrappedData(): void
-    {
-        HookedPostController::resetHooks();
-        config()->set('apilot.response_wrapper', null);
-
-        $this->postJson('api/hooked-posts', [
-            'title' => 'Post with null wrapper',
-            'body'  => 'Content',
-        ]);
-
-        $nullWrapperData = HookedPostController::$lastTransformResponseData;
-
-        HookedPostController::resetHooks();
-        config()->set('apilot.response_wrapper', 'data');
-
-        $this->postJson('api/hooked-posts', [
-            'title' => 'Post with data wrapper',
-            'body'  => 'Content',
-        ]);
-
-        $dataWrapperData = HookedPostController::$lastTransformResponseData;
-
-        // Both configs must produce the same data format in transformResponse
-        $this->assertIsArray($nullWrapperData);
-        $this->assertIsArray($dataWrapperData);
-        $this->assertArrayHasKey('id', $nullWrapperData);
-        $this->assertArrayHasKey('id', $dataWrapperData);
-        $this->assertArrayNotHasKey('data', $nullWrapperData);
-        $this->assertArrayNotHasKey('data', $dataWrapperData);
-        $this->assertArrayNotHasKey('result', $nullWrapperData);
-    }
-
-    // =========================================================================
-    // Tests 20–22: OpenAPI Spec
-    // =========================================================================
-
-    public function testOpenApiSpecReflectsWrapperConfig(): void
+    public function testOpenApiSpecReflectsNamedWrapper(): void
     {
         config()->set('apilot.response_wrapper', 'result');
 
         $this->app->make(RouteRegistry::class)->clear();
         CrudRouteRegistrar::resource('posts', PostControllerFixture::class)
-            ->only(['show'])
+            ->only(['show', 'index'])
             ->register();
 
         $spec       = $this->app->make(OpenApiGenerator::class)->generate();
         $showSchema = $spec['paths']['/api/posts/{id}']['get']['responses']['200']['content']['application/json']['schema'];
-
-        $this->assertArrayHasKey('properties', $showSchema);
-        $this->assertArrayHasKey('result', $showSchema['properties']);
-        $this->assertArrayNotHasKey('data', $showSchema['properties']);
-    }
-
-    public function testOpenApiSpecReflectsNullWrapperOnShow(): void
-    {
-        config()->set('apilot.response_wrapper', null);
-
-        $this->app->make(RouteRegistry::class)->clear();
-        CrudRouteRegistrar::resource('posts', PostControllerFixture::class)
-            ->only(['show'])
-            ->register();
-
-        $spec       = $this->app->make(OpenApiGenerator::class)->generate();
-        $showSchema = $spec['paths']['/api/posts/{id}']['get']['responses']['200']['content']['application/json']['schema'];
-
-        $this->assertArrayHasKey('$ref', $showSchema);
-        $this->assertArrayNotHasKey('properties', $showSchema);
-    }
-
-    public function testOpenApiSpecReflectsNullWrapperOnIndex(): void
-    {
-        config()->set('apilot.response_wrapper', null);
-
-        $this->app->make(RouteRegistry::class)->clear();
-        CrudRouteRegistrar::resource('posts', PostControllerFixture::class)
-            ->only(['index'])
-            ->register();
-
-        $spec        = $this->app->make(OpenApiGenerator::class)->generate();
         $indexSchema = $spec['paths']['/api/posts']['get']['responses']['200']['content']['application/json']['schema'];
 
-        $this->assertArrayHasKey('properties', $indexSchema);
-        $this->assertArrayHasKey('items', $indexSchema['properties']);
-        $this->assertArrayHasKey('meta', $indexSchema['properties']);
-        $this->assertArrayHasKey('links', $indexSchema['properties']);
+        $this->assertArrayHasKey('result', $showSchema['properties']);
+        $this->assertArrayNotHasKey('data', $showSchema['properties'] ?? []);
+        $this->assertArrayHasKey('result', $indexSchema['properties']);
         $this->assertArrayNotHasKey('data', $indexSchema['properties']);
+    }
+
+    public function testOpenApiSpecReflectsEmptyArrayWrapper(): void
+    {
+        config()->set('apilot.response_wrapper', []);
+
+        $this->app->make(RouteRegistry::class)->clear();
+        CrudRouteRegistrar::resource('posts', PostControllerFixture::class)
+            ->only(['show', 'index'])
+            ->register();
+
+        $spec       = $this->app->make(OpenApiGenerator::class)->generate();
+        $showSchema = $spec['paths']['/api/posts/{id}']['get']['responses']['200']['content']['application/json']['schema'];
+        $indexSchema = $spec['paths']['/api/posts']['get']['responses']['200']['content']['application/json']['schema'];
+
+        // Show: direct $ref (no wrapper properties)
+        $this->assertArrayHasKey('$ref', $showSchema);
+        $this->assertArrayNotHasKey('properties', $showSchema);
+
+        // Index: "items" key
+        $this->assertArrayHasKey('items', $indexSchema['properties']);
+        $this->assertArrayNotHasKey('data', $indexSchema['properties']);
+    }
+
+    public function testOpenApiSpecReflectsNullWrapper(): void
+    {
+        config()->set('apilot.response_wrapper', null);
+
+        $this->app->make(RouteRegistry::class)->clear();
+        CrudRouteRegistrar::resource('posts', PostControllerFixture::class)
+            ->only(['show', 'index'])
+            ->register();
+
+        $spec       = $this->app->make(OpenApiGenerator::class)->generate();
+        $showSchema = $spec['paths']['/api/posts/{id}']['get']['responses']['200']['content']['application/json']['schema'];
+        $indexSchema = $spec['paths']['/api/posts']['get']['responses']['200']['content']['application/json']['schema'];
+
+        // Show: "data" wrapper (Laravel default)
+        $this->assertArrayHasKey('data', $showSchema['properties']);
+
+        // Index: "data" key
+        $this->assertArrayHasKey('data', $indexSchema['properties']);
+    }
+
+    // =========================================================================
+    // Edge Cases
+    // =========================================================================
+
+    public function testEmptyStringFallsBackToLaravelDefault(): void
+    {
+        config()->set('apilot.response_wrapper', '');
+        $post = Post::factory()->create();
+
+        $response = $this->getJson("api/posts/{$post->id}");
+
+        $response->assertStatus(200);
+        $data = $response->json();
+        // Falls back to 'laravel' mode → Laravel adds "data" wrapper
+        $this->assertArrayHasKey('data', $data);
+    }
+
+    public function testNumericValueFallsBackToLaravelDefault(): void
+    {
+        config()->set('apilot.response_wrapper', 123);
+        $post = Post::factory()->create();
+
+        $response = $this->getJson("api/posts/{$post->id}");
+
+        $response->assertStatus(200);
+        $data = $response->json();
+        // Falls back to 'laravel' mode → Laravel adds "data" wrapper
+        $this->assertArrayHasKey('data', $data);
+    }
+
+    public function testNonEmptyArrayFallsBackToLaravelDefault(): void
+    {
+        config()->set('apilot.response_wrapper', ['data']);
+        $post = Post::factory()->create();
+
+        $response = $this->getJson("api/posts/{$post->id}");
+
+        $response->assertStatus(200);
+        $data = $response->json();
+        // Falls back to 'laravel' mode → Laravel adds "data" wrapper
+        $this->assertArrayHasKey('data', $data);
     }
 }

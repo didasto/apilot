@@ -130,8 +130,12 @@ class PathBuilder
             $parameters[] = $filterParam;
         }
 
-        $wrapper    = config('apilot.response_wrapper');
-        $itemsKey   = $wrapper ?? 'items';
+        $mode     = $this->resolveWrapperMode();
+        $itemsKey = match ($mode) {
+            'none'  => 'items',
+            'named' => config('apilot.response_wrapper'),
+            default => 'data', // 'laravel' mode — matches Laravel's JsonResource default
+        };
 
         return array_merge($base, [
             'summary'     => 'List all ' . $pluralName,
@@ -163,19 +167,9 @@ class PathBuilder
     /** @return array<string, mixed> */
     protected function buildShowOp(RouteEntry $entry, string $schemaName, array $base): array
     {
-        $singularName = Str::singular(Str::studly($entry->resourceName));
-        $wrapper      = config('apilot.response_wrapper');
-
-        if ($wrapper === null) {
-            $responseSchema = ['$ref' => '#/components/schemas/' . $schemaName . 'Response'];
-        } else {
-            $responseSchema = [
-                'type'       => 'object',
-                'properties' => [
-                    $wrapper => ['$ref' => '#/components/schemas/' . $schemaName . 'Response'],
-                ],
-            ];
-        }
+        $singularName   = Str::singular(Str::studly($entry->resourceName));
+        $mode           = $this->resolveWrapperMode();
+        $responseSchema = $this->buildItemResponseSchema($schemaName, $mode);
 
         return array_merge($base, [
             'summary'     => 'Get a single ' . $singularName,
@@ -205,19 +199,9 @@ class PathBuilder
     /** @return array<string, mixed> */
     protected function buildStoreOp(RouteEntry $entry, string $schemaName, array $base, ?string $storeSchemaRef): array
     {
-        $singularName = Str::singular(Str::studly($entry->resourceName));
-        $wrapper      = config('apilot.response_wrapper');
-
-        if ($wrapper === null) {
-            $responseSchema = ['$ref' => '#/components/schemas/' . $schemaName . 'Response'];
-        } else {
-            $responseSchema = [
-                'type'       => 'object',
-                'properties' => [
-                    $wrapper => ['$ref' => '#/components/schemas/' . $schemaName . 'Response'],
-                ],
-            ];
-        }
+        $singularName   = Str::singular(Str::studly($entry->resourceName));
+        $mode           = $this->resolveWrapperMode();
+        $responseSchema = $this->buildItemResponseSchema($schemaName, $mode);
 
         return array_merge($base, [
             'summary'     => 'Create a new ' . $singularName,
@@ -240,19 +224,9 @@ class PathBuilder
     /** @return array<string, mixed> */
     protected function buildUpdateOp(RouteEntry $entry, string $schemaName, array $base, ?string $updateSchemaRef): array
     {
-        $singularName = Str::singular(Str::studly($entry->resourceName));
-        $wrapper      = config('apilot.response_wrapper');
-
-        if ($wrapper === null) {
-            $responseSchema = ['$ref' => '#/components/schemas/' . $schemaName . 'Response'];
-        } else {
-            $responseSchema = [
-                'type'       => 'object',
-                'properties' => [
-                    $wrapper => ['$ref' => '#/components/schemas/' . $schemaName . 'Response'],
-                ],
-            ];
-        }
+        $singularName   = Str::singular(Str::studly($entry->resourceName));
+        $mode           = $this->resolveWrapperMode();
+        $responseSchema = $this->buildItemResponseSchema($schemaName, $mode);
 
         return array_merge($base, [
             'summary'     => 'Update an existing ' . $singularName,
@@ -557,6 +531,55 @@ class PathBuilder
         }
 
         return null;
+    }
+
+    /**
+     * Determines the wrapper mode from config (mirrors BaseCrudController::resolveWrapperMode()).
+     */
+    private function resolveWrapperMode(): string
+    {
+        $wrapper = config('apilot.response_wrapper');
+
+        if ($wrapper === null) {
+            return 'laravel';
+        }
+
+        if (is_array($wrapper) && empty($wrapper)) {
+            return 'none';
+        }
+
+        if (is_string($wrapper) && $wrapper !== '') {
+            return 'named';
+        }
+
+        return 'laravel';
+    }
+
+    /**
+     * Builds the OpenAPI response schema for a single-item endpoint based on the wrapper mode.
+     *
+     * 'laravel' → wrapped under "data" (Laravel's default)
+     * 'none'    → direct $ref (no wrapper key)
+     * 'named'   → wrapped under the configured string key
+     *
+     * @return array<string, mixed>
+     */
+    private function buildItemResponseSchema(string $schemaName, string $mode): array
+    {
+        if ($mode === 'none') {
+            return ['$ref' => '#/components/schemas/' . $schemaName . 'Response'];
+        }
+
+        $wrapperKey = $mode === 'named'
+            ? (string) config('apilot.response_wrapper')
+            : 'data'; // 'laravel' mode uses 'data'
+
+        return [
+            'type'       => 'object',
+            'properties' => [
+                $wrapperKey => ['$ref' => '#/components/schemas/' . $schemaName . 'Response'],
+            ],
+        ];
     }
 
     /**

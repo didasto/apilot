@@ -82,11 +82,21 @@ return [
     |--------------------------------------------------------------------------
     | Response Wrapper
     |--------------------------------------------------------------------------
-    | The key under which data is wrapped in JSON responses.
-    | 'data' → { "data": [...] }
-    | null  → uses Laravel's default Resource wrapping
+    |
+    | Controls how Apilot formats JSON responses. Three modes are available:
+    |
+    | null     → Laravel Default. Apilot does not intervene.
+    |            Laravel's JsonResource determines the format (default: "data" wrapper).
+    |
+    | []       → No wrapper. Single items are returned as a direct JSON object.
+    |            Paginated responses use "items" as the collection key.
+    |
+    | 'string' → Named wrapper. The given string is used as the wrapper key.
+    |            Examples: 'data', 'result', 'payload'
+    |
+    | Error responses (404, 403, 422) are never affected by this setting.
     */
-    'response_wrapper' => 'data',
+    'response_wrapper' => null,
 
     /*
     |--------------------------------------------------------------------------
@@ -148,6 +158,100 @@ return [
 
 ];
 ```
+
+## Response Wrapper Modes
+
+The `response_wrapper` option controls how Apilot wraps your JSON responses. Three modes are available.
+
+### Mode 1: `null` — Laravel Default
+
+```php
+'response_wrapper' => null,
+```
+
+Apilot does not intervene in response formatting. Laravel's `JsonResource` determines the format. By default Laravel adds a `"data"` wrapper unless you have called `JsonResource::withoutWrapping()` in your application.
+
+**Single-item (show, store, update):**
+```json
+{ "data": { "id": 1, "title": "Post 1" } }
+```
+
+**Collection (index):**
+```json
+{
+    "data": [
+        { "id": 1, "title": "Post 1" },
+        { "id": 2, "title": "Post 2" }
+    ],
+    "links": { "first": "...", "last": "...", "prev": null, "next": "..." },
+    "meta": { "current_page": 1, "last_page": 3, "per_page": 15, "total": 7 }
+}
+```
+
+---
+
+### Mode 2: `[]` — No Wrapper
+
+```php
+'response_wrapper' => [],
+```
+
+Single items are returned as a direct JSON object. Paginated responses use `"items"` as the collection key (required to transport `meta` and `links`).
+
+**Single-item (show, store, update):**
+```json
+{ "id": 1, "title": "Post 1", "created_at": "2026-03-31T22:18:02.000000Z" }
+```
+
+**Collection (index):**
+```json
+{
+    "items": [
+        { "id": 1, "title": "Post 1" },
+        { "id": 2, "title": "Post 2" }
+    ],
+    "meta": { "current_page": 1, "last_page": 3, "per_page": 15, "total": 7 },
+    "links": { "first": "...", "last": "...", "prev": null, "next": "..." }
+}
+```
+
+---
+
+### Mode 3: `'string'` — Named Wrapper
+
+```php
+'response_wrapper' => 'data',   // or 'result', 'payload', etc.
+```
+
+All responses are wrapped under the specified key.
+
+**Single-item with `'result'`:**
+```json
+{ "result": { "id": 1, "title": "Post 1" } }
+```
+
+**Collection with `'result'`:**
+```json
+{
+    "result": [{ "id": 1, "title": "Post 1" }],
+    "meta": { "current_page": 1, "last_page": 3, "per_page": 15, "total": 7 },
+    "links": { "first": "...", "last": "...", "prev": null, "next": "..." }
+}
+```
+
+---
+
+### Destroy and Error Responses
+
+`DELETE` always returns `204 No Content` with an empty body — unaffected by the wrapper.
+
+Error responses (`404`, `403`, `422`, `501`) have their own fixed format and are never wrapped:
+
+```json
+{ "error": { "message": "Resource not found.", "status": 404 } }
+```
+
+---
 
 ## Common Customizations
 

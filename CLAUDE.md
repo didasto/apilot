@@ -21,124 +21,272 @@ Das Package `didasto/apilot` ist vollständig implementiert mit Namespace `Didas
 
 ## Problem
 
-Die Config-Option `response_wrapper` in `config/apilot.php` wird aktuell **nicht ausgewertet**. Egal ob `null` oder ein String gesetzt ist — Laravel `JsonResource` wrapped die Response immer in `"data"`, weil `JsonResource::wrap()` / `JsonResource::withoutWrapping()` nie aufgerufen wird.
+Die Config-Option `response_wrapper` in `config/apilot.php` wird aktuell nicht korrekt ausgewertet. Der Wrapper wird immer als `"data"` gesetzt, unabhängig von der Config.
 
 ---
 
-## Erwartetes Verhalten
+## Neues Verhalten: 3 Modi
 
-| Config-Wert | Verhalten |
-|---|---|
-| `'response_wrapper' => 'data'` | Response wrapped in `"data"` (Laravel-Default) |
-| `'response_wrapper' => 'result'` | Response wrapped in `"result"` |
-| `'response_wrapper' => null` | Kein Wrapping — Items direkt auf Top-Level |
+Die Config-Option `response_wrapper` unterstützt drei Werte mit klar getrenntem Verhalten:
 
-### Beispiel: `response_wrapper => null`, Index-Response
+### Modus 1: `null` — Laravel Default
 
-```json
-[
-    { "id": 1, "title": "Post 1" },
-    { "id": 2, "title": "Post 2" }
-]
+```php
+'response_wrapper' => null,
 ```
 
-Aber: **Pagination-Meta und Links müssen weiterhin verfügbar sein.** Bei `null` sollen `meta` und `links` als Response-Headers oder als Top-Level-Keys neben dem Array übertragen werden. Da ein JSON-Array keine zusätzlichen Keys haben kann, gibt es zwei sinnvolle Optionen:
+Apilot greift **nicht** in die Response-Formatierung ein. Laravel's `JsonResource` bestimmt das Format. Das bedeutet: Laravel's Default-Verhalten (`"data"`-Wrapper via `JsonResource`) bleibt aktiv, es sei denn, der Nutzer hat selbst `JsonResource::withoutWrapping()` in seiner App aufgerufen.
 
-**Option A (empfohlen): Envelope-Stil auch ohne Wrapper**
+**Apilot macht hier gar nichts** — keine `JsonResource::wrap()`-Aufrufe, keine manuelle Response-Erstellung. Die Standard-Laravel-Resource-Methoden (`toResponse()`, `::collection()`) werden unverändert genutzt.
 
-Bei paginierten Responses (`index`) wird trotzdem ein Objekt zurückgegeben, aber die Items liegen direkt unter einem konfigurierbaren Key oder sind die einzigen Daten:
+**Single-Item (show, store, update):**
+```json
+{
+    "data": {
+        "id": 1,
+        "title": "Post 1"
+    }
+}
+```
 
+**Collection (index):**
+```json
+{
+    "data": [
+        { "id": 1, "title": "Post 1" },
+        { "id": 2, "title": "Post 2" }
+    ],
+    "links": {
+        "first": "...",
+        "last": "...",
+        "prev": null,
+        "next": "..."
+    },
+    "meta": {
+        "current_page": 1,
+        "last_page": 3,
+        "per_page": 15,
+        "total": 7
+    }
+}
+```
+
+*(Das ist exakt Laravels Standard-Output für paginierte Resources.)*
+
+---
+
+### Modus 2: `[]` — Kein Wrapper
+
+```php
+'response_wrapper' => [],
+```
+
+Apilot entfernt den Wrapper komplett. Single-Item-Responses geben das Objekt direkt zurück. Paginierte Responses nutzen `"items"` als Key für die Collection, weil `meta` und `links` sonst nicht transportiert werden können.
+
+**Single-Item (show, store, update):**
+```json
+{
+    "id": 1,
+    "title": "Post 1",
+    "content": "...",
+    "created_at": "2026-03-31T22:18:02.000000Z"
+}
+```
+
+**Collection (index):**
 ```json
 {
     "items": [
         { "id": 1, "title": "Post 1" },
         { "id": 2, "title": "Post 2" }
     ],
-    "meta": { "current_page": 1, "last_page": 3, "per_page": 15, "total": 7 },
-    "links": { "first": "...", "last": "...", "prev": null, "next": "..." }
+    "meta": {
+        "current_page": 1,
+        "last_page": 3,
+        "per_page": 15,
+        "total": 7
+    },
+    "links": {
+        "first": "...",
+        "last": "...",
+        "prev": null,
+        "next": "..."
+    }
 }
 ```
-
-Nein — das wäre wieder ein Wrapper unter anderem Namen. Stattdessen:
-
-**Option B (umsetzen): Controller baut die Response manuell**
-
-Für `response_wrapper => null`:
-
-- **Index (paginiert):** Die Response ist ein Objekt, Items liegen **ohne Key-Wrapper** neben `meta` und `links`:
-
-```json
-{
-    "items": [...],
-    "meta": {...},
-    "links": {...}
-}
-```
-
-Nein — das ist genau das gleiche Problem. Der sauberste Ansatz:
-
-**Tatsächliche Umsetzung:**
-
-Die Controller (`ModelCrudController` und `ServiceCrudController`) sollen die Response **nicht** über `JsonResource::collection()` und `JsonResource::make()` bauen, wenn sie den Wrapper kontrollieren müssen. Stattdessen soll der Controller die Response manuell zusammenbauen.
-
-### Konkretes Verhalten:
-
-#### Single-Resource Responses (show, store, update):
-
-| Config | Response |
-|---|---|
-| `'response_wrapper' => 'data'` | `{ "data": { "id": 1, ... } }` |
-| `'response_wrapper' => 'result'` | `{ "result": { "id": 1, ... } }` |
-| `'response_wrapper' => null` | `{ "id": 1, ... }` |
-
-#### Collection Responses (index):
-
-| Config | Response |
-|---|---|
-| `'response_wrapper' => 'data'` | `{ "data": [...], "meta": {...}, "links": {...} }` |
-| `'response_wrapper' => 'result'` | `{ "result": [...], "meta": {...}, "links": {...} }` |
-| `'response_wrapper' => null` | `{ "items": [...], "meta": {...}, "links": {...} }` |
-
-**Bei `null` wird für paginierte Responses der Key `items` als Fallback genutzt**, weil `meta` und `links` sonst nicht transportiert werden können. Dieses Verhalten soll in der Config dokumentiert sein.
 
 ---
 
-## Änderungen
-
-### 1. `ApilotServiceProvider` — Wrapper-Konfiguration anwenden
-
-In der `boot()`-Methode des ServiceProviders:
+### Modus 3: `'string'` — Named Wrapper
 
 ```php
-$wrapper = config('apilot.response_wrapper');
+'response_wrapper' => 'data',     // oder 'result', 'payload', etc.
+```
 
-if ($wrapper === null) {
-    \Illuminate\Http\Resources\Json\JsonResource::withoutWrapping();
-} else {
-    \Illuminate\Http\Resources\Json\JsonResource::wrap($wrapper);
+Apilot wrapped alle Responses unter dem angegebenen Key. Der Nutzer kontrolliert den Key-Namen.
+
+**Single-Item mit `'data'` (show, store, update):**
+```json
+{
+    "data": {
+        "id": 1,
+        "title": "Post 1"
+    }
 }
 ```
 
-**Achtung:** `JsonResource::withoutWrapping()` und `::wrap()` sind **globale** Einstellungen — sie betreffen ALLE JsonResources in der gesamten Laravel-App. Das muss in der Doku klar kommuniziert werden.
+**Collection mit `'data'` (index):**
+```json
+{
+    "data": [
+        { "id": 1, "title": "Post 1" },
+        { "id": 2, "title": "Post 2" }
+    ],
+    "meta": {
+        "current_page": 1,
+        "last_page": 3,
+        "per_page": 15,
+        "total": 7
+    },
+    "links": {
+        "first": "...",
+        "last": "...",
+        "prev": null,
+        "next": "..."
+    }
+}
+```
 
-### 2. Controller-Methoden — Manuelle Response-Erstellung bei `null`-Wrapper
+**Single-Item mit `'result'`:**
+```json
+{
+    "result": {
+        "id": 1,
+        "title": "Post 1"
+    }
+}
+```
 
-Da `JsonResource::withoutWrapping()` bei Collections die `meta` und `links` Keys entfernt (Laravel gibt dann nur das nackte Array zurück), müssen die Controller bei paginierten Responses manuell eingreifen.
+**Collection mit `'result'`:**
+```json
+{
+    "result": [
+        { "id": 1, "title": "Post 1" },
+        { "id": 2, "title": "Post 2" }
+    ],
+    "meta": { ... },
+    "links": { ... }
+}
+```
 
-Erstelle eine gemeinsame Methode in einem Trait oder einer Basisklasse, die von beiden Controllern genutzt wird:
+---
+
+### Destroy-Response (alle Modi)
+
+Die `destroy`-Response ist bei **allen drei Modi** identisch: `204 No Content` mit leerem Body. Der Wrapper hat keine Auswirkung auf destroy.
+
+### Error-Responses (alle Modi)
+
+Fehler-Responses (404, 403, 422, 501) haben bei **allen drei Modi** ihr eigenes festes Format und werden **nicht** vom Wrapper beeinflusst:
+
+```json
+// 404
+{ "error": { "message": "Resource not found.", "status": 404 } }
+
+// 422
+{ "message": "The title field is required.", "errors": { "title": ["The title field is required."] } }
+```
+
+---
+
+## Umsetzung
+
+### 1. Erkennung des Modus
+
+Erstelle eine Hilfsmethode (in einem Trait oder einer Hilfsklasse), die den Wrapper-Modus ermittelt:
 
 ```php
-/**
- * Baut die paginierte Index-Response manuell auf.
- */
-protected function buildPaginatedResponse(mixed $paginator, string $resourceClass, Request $request): JsonResponse
+protected function resolveWrapperMode(): string
 {
     $wrapper = config('apilot.response_wrapper');
 
-    // Items durch die Resource transformieren
+    if ($wrapper === null) {
+        return 'laravel';   // Modus 1: Laravel Default
+    }
+
+    if (is_array($wrapper) && empty($wrapper)) {
+        return 'none';      // Modus 2: Kein Wrapper
+    }
+
+    if (is_string($wrapper) && $wrapper !== '') {
+        return 'named';     // Modus 3: Named Wrapper
+    }
+
+    // Fallback für ungültige Werte
+    return 'laravel';
+}
+
+protected function resolveWrapperKey(): ?string
+{
+    $wrapper = config('apilot.response_wrapper');
+
+    if (is_string($wrapper) && $wrapper !== '') {
+        return $wrapper;
+    }
+
+    return null;
+}
+```
+
+### 2. Response-Builder-Methoden
+
+Erstelle zwei zentrale Methoden, die von **beiden** Controllern (`ModelCrudController` und `ServiceCrudController`) genutzt werden. Extrahiere sie in einen gemeinsamen Trait oder eine Basisklasse.
+
+**Wichtig:** Diese Methoden dürfen **kein** `JsonResource::withoutWrapping()` oder `JsonResource::wrap()` aufrufen — das würde global die gesamte App beeinflussen. Die Response wird stattdessen **manuell** zusammengebaut.
+
+```php
+/**
+ * Baut die Response für ein einzelnes Item (show, store, update).
+ */
+protected function buildItemResponse(mixed $item, string $resourceClass, string $action, Request $request): JsonResponse
+{
+    $mode = $this->resolveWrapperMode();
+    $resolved = (new $resourceClass($item))->resolve($request);
+
+    $responseData = match ($mode) {
+        'none'    => $resolved,                                     // Direkt das Objekt
+        'named'   => [$this->resolveWrapperKey() => $resolved],     // Gewrapped
+        'laravel' => null,                                          // Marker: Laravel Default nutzen
+        default   => null,
+    };
+
+    // Bei 'laravel'-Modus: Lass Laravel die Response bauen
+    if ($responseData === null) {
+        return (new $resourceClass($item))
+            ->response()
+            ->setStatusCode($this->getStatusCode($action));
+    }
+
+    return new JsonResponse($responseData, $this->getStatusCode($action));
+}
+
+/**
+ * Baut die paginierte Response für index.
+ */
+protected function buildPaginatedResponse(mixed $paginator, string $resourceClass, string $action, Request $request): JsonResponse
+{
+    $mode = $this->resolveWrapperMode();
+
+    // Bei 'laravel'-Modus: Lass Laravel die Response bauen (Standard-Pagination-Format)
+    if ($mode === 'laravel') {
+        return $resourceClass::collection($paginator)
+            ->response()
+            ->setStatusCode($this->getStatusCode($action));
+    }
+
+    // Für 'none' und 'named': Manuell zusammenbauen
     $items = $resourceClass::collection($paginator)->resolve($request);
 
-    // Meta und Links aufbauen
     $meta = [
         'current_page' => $paginator->currentPage(),
         'last_page'    => $paginator->lastPage(),
@@ -153,69 +301,63 @@ protected function buildPaginatedResponse(mixed $paginator, string $resourceClas
         'next'  => $paginator->nextPageUrl(),
     ];
 
-    // Response zusammenbauen
-    if ($wrapper === null) {
-        $responseData = [
-            'items' => $items,
-            'meta'  => $meta,
-            'links' => $links,
-        ];
-    } else {
-        $responseData = [
-            $wrapper => $items,
-            'meta'   => $meta,
-            'links'  => $links,
-        ];
-    }
+    $itemsKey = match ($mode) {
+        'none'  => 'items',
+        'named' => $this->resolveWrapperKey(),
+        default => 'data',
+    };
 
-    return new JsonResponse($responseData, $this->getStatusCode('index'));
-}
-
-/**
- * Baut die Single-Item-Response auf.
- */
-protected function buildItemResponse(mixed $item, string $resourceClass, string $action, Request $request): JsonResponse
-{
-    $wrapper = config('apilot.response_wrapper');
-    $resolved = (new $resourceClass($item))->resolve($request);
-
-    if ($wrapper === null) {
-        $responseData = $resolved;
-    } else {
-        $responseData = [$wrapper => $resolved];
-    }
+    $responseData = [
+        $itemsKey => $items,
+        'meta'    => $meta,
+        'links'   => $links,
+    ];
 
     return new JsonResponse($responseData, $this->getStatusCode($action));
 }
 ```
 
-### 3. Beide Controller anpassen
+### 3. Controller-Methoden anpassen
 
-Ersetze in `ModelCrudController` und `ServiceCrudController` die bisherige Response-Erstellung durch Aufrufe von `buildPaginatedResponse()` und `buildItemResponse()`.
+Ersetze in **beiden Controllern** (`ModelCrudController` und `ServiceCrudController`) die bisherige Response-Erstellung in den Methoden `index`, `show`, `store` und `update` durch Aufrufe der neuen Builder-Methoden.
 
-**Achte darauf, dass die Hooks (`afterIndex`, `transformResponse` etc.) weiterhin an den richtigen Stellen aufgerufen werden.** Die Response-Builder-Methoden sollen NACH den Hooks aufgerufen werden.
+**Achte darauf, dass die Hooks weiterhin an den richtigen Stellen aufgerufen werden.** Die Builder-Methoden sollen NACH den Hooks (`afterIndex`, `afterStore`, `afterUpdate`, `transformResponse`) aufgerufen werden.
 
-### 4. Config-Kommentar aktualisieren
+### 4. ServiceCrudController — Index-Response
 
-In `config/apilot.php` den Kommentar für `response_wrapper` erweitern:
+Der `ServiceCrudController` baut die Index-Response aus `PaginatedResult`. Passe die Logik analog an. Im `laravel`-Modus nutze `'data'` als Key (Laravels Standard simulieren), da der ServiceCrudController keinen Eloquent-Paginator hat und die Response immer manuell baut.
+
+### 5. Config-Kommentar aktualisieren
+
+In `config/apilot.php`:
 
 ```php
 /*
 |--------------------------------------------------------------------------
 | Response Wrapper
 |--------------------------------------------------------------------------
-| Der Key, unter dem Daten im JSON-Response gewrapped werden.
 |
-| 'data'   → { "data": { ... } }          (Default, Laravel-Standard)
-| 'result' → { "result": { ... } }        (Custom Wrapper-Key)
-| null     → { "id": 1, ... }             (Kein Wrapping für Single-Items)
-|             { "items": [...], "meta": {...}, "links": {...} }
-|             (Paginierte Responses nutzen "items" als Key)
+| Steuert, wie Apilot die JSON-Responses formatiert.
+| Drei Modi sind verfügbar:
 |
-| HINWEIS: Diese Einstellung betrifft ALLE JsonResources in der App,
-| nicht nur die von Apilot generierten.
+| null     → Laravel Default. Apilot greift nicht ein.
+|            Laravel's JsonResource bestimmt das Format (Standard: "data"-Wrapper).
+|            Nutze diesen Modus wenn du Laravels Standard-Verhalten behalten
+|            oder selbst JsonResource::wrap()/withoutWrapping() steuern willst.
+|
+| []       → Kein Wrapper. Single-Items werden direkt als JSON-Objekt zurückgegeben.
+|            Paginierte Responses nutzen "items" als Key für die Collection.
+|            Beispiel show:  { "id": 1, "title": "..." }
+|            Beispiel index: { "items": [...], "meta": {...}, "links": {...} }
+|
+| 'string' → Named Wrapper. Der angegebene String wird als Wrapper-Key genutzt.
+|            Beispiel 'data':   { "data": { "id": 1, ... } }
+|            Beispiel 'result': { "result": { "id": 1, ... } }
+|
+| Error-Responses (404, 403, 422) werden nicht vom Wrapper beeinflusst.
+|
 */
-'response_wrapper' => 'data',
+'response_wrapper' => null,
 ```
 
 ---
@@ -224,112 +366,205 @@ In `config/apilot.php` den Kommentar für `response_wrapper` erweitern:
 
 ### Neue Datei: `tests/Feature/ResponseWrapperTest.php`
 
-Nutze den bestehenden Post-Fixture-Controller. Registriere Routen im `setUp()`. Ändere die Config per `config()->set()` in jedem Test.
+Nutze den bestehenden Post-Fixture-Controller und die bestehende Post-Migration. Registriere Routen im `setUp()`. Ändere die Config per `config()->set('apilot.response_wrapper', ...)` in jedem Test.
+
+#### Modus 1: `null` — Laravel Default
 
 ```
-1. testDefaultWrapperIsData
-   — Config: 'data' (Default).
-   — POST store → Response hat Key "data" mit dem Post-Objekt.
-   — Prüfe: json_decode hat exakt die Keys ["data"].
+1. testNullWrapperShowReturnsLaravelDefault
+   — config: null
+   — GET show → Response hat Key "data" mit dem Post-Objekt.
 
-2. testDefaultWrapperOnIndex
-   — Config: 'data'.
-   — GET index → Response hat Keys "data", "meta", "links".
-   — "data" ist ein Array von Posts.
+2. testNullWrapperIndexReturnsLaravelDefault
+   — config: null
+   — Erstelle 5 Posts, GET index
+   — Response hat Keys "data" (Array), "links", "meta".
 
-3. testCustomWrapperKey
-   — Config: 'result'.
-   — POST store → Response hat Key "result" mit dem Post-Objekt.
-   — Prüfe: json_decode hat exakt die Keys ["result"].
+3. testNullWrapperStoreReturnsLaravelDefault
+   — config: null
+   — POST store → Response hat Key "data".
 
-4. testCustomWrapperKeyOnIndex
-   — Config: 'result'.
-   — GET index → Response hat Keys "result", "meta", "links".
-   — "result" ist ein Array von Posts.
+4. testNullWrapperUpdateReturnsLaravelDefault
+   — config: null
+   — PUT update → Response hat Key "data".
+```
 
-5. testNullWrapperRemovesWrappingOnShow
-   — Config: null.
-   — GET show → Response ist direkt das Post-Objekt (kein Wrapper-Key).
-   — Prüfe: Response enthält "id", "title" etc. direkt auf Top-Level.
+#### Modus 2: `[]` — Kein Wrapper
 
-6. testNullWrapperRemovesWrappingOnStore
-   — Config: null.
+```
+5. testEmptyArrayWrapperShowReturnsUnwrapped
+   — config: []
+   — GET show → Top-Level-Keys sind "id", "title", etc. Kein "data"-Key.
+
+6. testEmptyArrayWrapperStoreReturnsUnwrapped
+   — config: []
    — POST store → Response ist direkt das erstellte Post-Objekt.
 
-7. testNullWrapperRemovesWrappingOnUpdate
-   — Config: null.
+7. testEmptyArrayWrapperUpdateReturnsUnwrapped
+   — config: []
    — PUT update → Response ist direkt das aktualisierte Post-Objekt.
 
-8. testNullWrapperUsesItemsKeyOnIndex
-   — Config: null.
-   — GET index → Response hat Keys "items", "meta", "links".
-   — "items" ist ein Array von Posts.
+8. testEmptyArrayWrapperIndexUsesItemsKey
+   — config: []
+   — Erstelle 5 Posts, GET index.
+   — Response hat Keys "items", "meta", "links". Kein "data"-Key.
 
-9. testNullWrapperIndexMetaIsCorrect
-   — Config: null.
-   — Erstelle 20 Posts, GET index mit per_page=5.
-   — meta.total = 20, meta.last_page = 4, meta.per_page = 5, meta.current_page = 1.
+9. testEmptyArrayWrapperIndexItemsContainsPosts
+   — config: []
+   — Erstelle 3 Posts, GET index.
+   — "items" enthält 3 Objekte mit "id", "title", etc.
 
-10. testNullWrapperIndexLinksAreCorrect
-    — Config: null.
+10. testEmptyArrayWrapperIndexMetaIsCorrect
+    — config: []
+    — Erstelle 20 Posts, GET index mit per_page=5.
+    — meta.total = 20, meta.last_page = 4, meta.per_page = 5, meta.current_page = 1.
+
+11. testEmptyArrayWrapperIndexLinksAreCorrect
+    — config: []
     — Erstelle 20 Posts, GET index mit per_page=5, page=2.
-    — links.prev ist nicht null, links.next ist nicht null.
+    — links.prev nicht null, links.next nicht null.
 
-11. testDestroyResponseUnaffectedByWrapper
-    — Config: null, 'data', 'result' → DELETE destroy ist immer 204 mit leerem Body.
+12. testEmptyArrayWrapperIndexPage1HasNoPrev
+    — config: []
+    — GET index page=1 → links.prev ist null.
 
-12. testWrapperWorksWithServiceController
-    — Config: null.
-    — GET index auf ServiceCrudController → Response hat "items", "meta", "links".
+13. testEmptyArrayWrapperIndexLastPageHasNoNext
+    — config: []
+    — Erstelle 10 Posts, per_page=5, page=2 → links.next ist null.
+```
 
-13. testWrapperWorksWithServiceControllerShow
-    — Config: null.
-    — GET show auf ServiceCrudController → Response ist direkt das Item-Objekt.
+#### Modus 3: `'string'` — Named Wrapper
 
-14. testCustomWrapperWorksWithServiceController
-    — Config: 'result'.
-    — POST store auf ServiceCrudController → Response hat Key "result".
+```
+14. testStringWrapperDataShowWrapsInData
+    — config: 'data'
+    — GET show → Response hat Key "data".
 
-15. testWrapperDoesNotAffectErrorResponses
-    — Config: null.
-    — GET show mit ungültiger ID → 404-Response hat weiterhin { "error": { "message": ..., "status": 404 } }.
+15. testStringWrapperDataIndexWrapsInData
+    — config: 'data'
+    — GET index → Response hat Keys "data", "meta", "links".
 
-16. testWrapperDoesNotAffectValidationErrors
-    — Config: null.
-    — POST store mit ungültigen Daten → 422-Response hat weiterhin { "message": ..., "errors": {...} }.
+16. testStringWrapperResultShowWrapsInResult
+    — config: 'result'
+    — GET show → Response hat Key "result". Kein "data"-Key.
 
-17. testHooksStillWorkWithNullWrapper
-    — Config: null.
-    — Nutze HookedPostController, POST store → Hooks werden aufgerufen UND Response hat kein Wrapper-Key.
+17. testStringWrapperResultIndexWrapsInResult
+    — config: 'result'
+    — GET index → Response hat Keys "result", "meta", "links". Kein "data"-Key.
 
-18. testHooksStillWorkWithCustomWrapper
-    — Config: 'result'.
-    — Nutze HookedPostController, POST store → Hooks werden aufgerufen UND Response hat Key "result".
+18. testStringWrapperResultStoreWrapsInResult
+    — config: 'result'
+    — POST store → Response hat Key "result".
 
-19. testTransformResponseHookReceivesUnwrappedData
-    — Config: null.
-    — transformResponse-Hook erhält die Daten im selben Format unabhängig vom Wrapper.
+19. testStringWrapperResultUpdateWrapsInResult
+    — config: 'result'
+    — PUT update → Response hat Key "result".
 
-20. testOpenApiSpecReflectsWrapperConfig
-    — Config: 'result'.
-    — Generiere Spec → show-Response-Schema hat Property "result" statt "data".
+20. testStringWrapperPayloadShowWrapsInPayload
+    — config: 'payload'
+    — GET show → Response hat Key "payload".
+```
 
-21. testOpenApiSpecReflectsNullWrapperOnShow
-    — Config: null.
-    — Generiere Spec → show-Response-Schema hat die Properties direkt (kein Wrapper-Key).
+#### Destroy (alle Modi)
 
-22. testOpenApiSpecReflectsNullWrapperOnIndex
-    — Config: null.
-    — Generiere Spec → index-Response-Schema hat "items", "meta", "links".
+```
+21. testDestroyUnaffectedByNullWrapper
+    — config: null → DELETE → 204, leerer Body.
+
+22. testDestroyUnaffectedByEmptyArrayWrapper
+    — config: [] → DELETE → 204, leerer Body.
+
+23. testDestroyUnaffectedByStringWrapper
+    — config: 'result' → DELETE → 204, leerer Body.
+```
+
+#### Error-Responses (alle Modi)
+
+```
+24. test404UnaffectedByEmptyArrayWrapper
+    — config: [] → GET show/999 → { "error": { "message": ..., "status": 404 } }.
+
+25. test404UnaffectedByStringWrapper
+    — config: 'result' → GET show/999 → { "error": { ... } }, NICHT { "result": { "error": ... } }.
+
+26. test422UnaffectedByEmptyArrayWrapper
+    — config: [] → POST store ungültig → { "message": ..., "errors": { ... } }.
+
+27. test422UnaffectedByStringWrapper
+    — config: 'result' → POST store ungültig → { "message": ..., "errors": { ... } }.
+```
+
+#### Hooks
+
+```
+28. testHooksWorkWithEmptyArrayWrapper
+    — config: [] → HookedPostController, POST store → Hooks aufgerufen UND Response unwrapped.
+
+29. testHooksWorkWithNamedWrapper
+    — config: 'result' → HookedPostController, POST store → Hooks aufgerufen UND Response in "result".
+
+30. testTransformResponseHookCalledForAllModes
+    — Für jeden Modus: transformResponse-Hook wird aufgerufen.
+```
+
+#### ServiceCrudController
+
+```
+31. testServiceControllerEmptyArrayWrapperShow
+    — config: [] → GET show → direkt das Item-Objekt.
+
+32. testServiceControllerEmptyArrayWrapperIndex
+    — config: [] → GET index → "items", "meta", "links".
+
+33. testServiceControllerNamedWrapperShow
+    — config: 'result' → GET show → { "result": { ... } }.
+
+34. testServiceControllerNamedWrapperIndex
+    — config: 'result' → GET index → { "result": [...], "meta": {...}, "links": {...} }.
+
+35. testServiceControllerNullWrapperIndex
+    — config: null → GET index → "data", "meta", "links".
+```
+
+#### OpenAPI Spec
+
+```
+36. testOpenApiSpecReflectsNamedWrapper
+    — config: 'result' → Spec: show-Schema hat "result", index hat "result".
+
+37. testOpenApiSpecReflectsEmptyArrayWrapper
+    — config: [] → Spec: show-Schema hat Properties direkt, index hat "items".
+
+38. testOpenApiSpecReflectsNullWrapper
+    — config: null → Spec: show-Schema hat "data", index hat "data".
+```
+
+#### Edge Cases
+
+```
+39. testEmptyStringFallsBackToLaravelDefault
+    — config: '' → verhält sich wie null.
+
+40. testNumericValueFallsBackToLaravelDefault
+    — config: 123 → verhält sich wie null.
+
+41. testNonEmptyArrayFallsBackToLaravelDefault
+    — config: ['data'] → verhält sich wie null. Nur exakt [] aktiviert den No-Wrapper-Modus.
 ```
 
 ---
 
-## Wichtig
+## Dokumentation aktualisieren
 
-- **Rückwärtskompatibilität:** Der Default-Wert ist `'data'` — bestehende Tests erwarten dieses Format und müssen weiterhin grün sein.
-- **Globaler Effekt:** `JsonResource::withoutWrapping()` betrifft die gesamte App. Das muss in der Doku und Config klar kommuniziert werden. Alternativ: Die Controller bauen die Responses komplett manuell (ohne sich auf Laravels Resource-Wrapping zu verlassen), dann ist der Effekt lokal. **Bevorzuge die manuelle Response-Erstellung**, um keine Seiteneffekte auf andere Teile der App zu haben.
-- **Error-Responses:** Fehler-Responses (404, 403, 422, 500) dürfen NICHT vom Wrapper beeinflusst werden. Sie haben ihr eigenes Format.
-- **OpenAPI-Spec:** Die Spec muss den konfigurierten Wrapper-Key reflektieren.
-- **Alle bestehenden Tests müssen grün bleiben.**
-- **Führe am Ende alle Tests aus** (bestehende + neue).
+Aktualisiere `docs/13-configuration.md` mit der vollständigen Beschreibung aller drei Modi, Beispiel-Responses und Hinweisen.
+
+---
+
+## Regeln
+
+- **Rückwärtskompatibilität:** Default ist `null` (Laravel Default). Bestehende Tests müssen grün bleiben.
+- **Kein globaler Seiteneffekt:** Kein `JsonResource::withoutWrapping()` oder `JsonResource::wrap()` aufrufen.
+- **Error-Responses immun.** Destroy immun.
+- **Beide Controller-Typen** müssen alle drei Modi unterstützen.
+- **OpenAPI-Spec** muss den Modus reflektieren.
+- **Alle Coding-Regeln gelten.** Alle Tests am Ende ausführen.
