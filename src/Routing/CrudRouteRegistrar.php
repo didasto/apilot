@@ -70,6 +70,10 @@ class CrudRouteRegistrar
         $globalMiddleware = config('apilot.middleware', ['api']);
         $middleware       = array_merge($globalMiddleware, $this->extraMiddleware);
 
+        if (config('apilot.force_json', true) && !in_array('apilot.json', $middleware)) {
+            array_unshift($middleware, 'apilot.json');
+        }
+
         $actions    = $this->resolveActions();
         $resource   = $this->resource;
         $controller = $this->controller;

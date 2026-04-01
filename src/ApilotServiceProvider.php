@@ -89,8 +89,12 @@ class ApilotServiceProvider extends ServiceProvider
         }
 
         if (config('apilot.openapi.enabled', true)) {
+            $docMiddleware = config('apilot.openapi.middleware', ['api']);
+            if (config('apilot.force_json', true) && !in_array('apilot.json', $docMiddleware)) {
+                array_unshift($docMiddleware, 'apilot.json');
+            }
             Route::prefix(config('apilot.prefix', 'api'))
-                ->middleware(config('apilot.openapi.middleware', ['api']))
+                ->middleware($docMiddleware)
                 ->get(config('apilot.openapi.path', 'doc'), OpenApiDocController::class)
                 ->name('apilot.doc');
         }

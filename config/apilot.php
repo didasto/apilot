@@ -21,6 +21,24 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Force JSON Middleware
+    |--------------------------------------------------------------------------
+    |
+    | Wenn true, wird die 'apilot.json' Middleware automatisch auf alle Routen
+    | angewendet, die über CrudRouteRegistrar oder das #[ApiResource] Attribut
+    | registriert werden. Auch die OpenAPI-Doc-Route erhält die Middleware.
+    |
+    | Die Middleware setzt auf dem Request den Accept: application/json Header
+    | (damit Validierungsfehler immer als JSON zurückgegeben werden) und auf
+    | der Response den Content-Type: application/json Header.
+    |
+    | false = Middleware muss manuell eingebunden werden.
+    |
+    */
+    'force_json' => true,
+
+    /*
+    |--------------------------------------------------------------------------
     | Pagination
     |--------------------------------------------------------------------------
     */

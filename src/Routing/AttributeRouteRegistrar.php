@@ -105,6 +105,10 @@ class AttributeRouteRegistrar
             $apiResource->middleware,
         );
 
+        if (config('apilot.force_json', true) && !in_array('apilot.json', $middleware)) {
+            array_unshift($middleware, 'apilot.json');
+        }
+
         // In der RouteRegistry registrieren
         try {
             $this->registry->register(new RouteEntry(
