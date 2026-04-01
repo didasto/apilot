@@ -130,12 +130,30 @@ class PathBuilder
             $parameters[] = $filterParam;
         }
 
-        $mode     = $this->resolveWrapperMode();
-        $itemsKey = match ($mode) {
-            'none'  => 'items',
-            'named' => config('apilot.response_wrapper'),
-            default => 'data', // 'laravel' mode — matches Laravel's JsonResource default
-        };
+        $mode = $this->resolveWrapperMode();
+
+        if ($mode === 'none') {
+            $indexSchema = [
+                'type'  => 'array',
+                'items' => ['$ref' => '#/components/schemas/' . $schemaName . 'Response'],
+            ];
+        } else {
+            $itemsKey = match ($mode) {
+                'named' => config('apilot.response_wrapper'),
+                default => 'data', // 'laravel' mode — matches Laravel's JsonResource default
+            };
+            $indexSchema = [
+                'type'       => 'object',
+                'properties' => [
+                    $itemsKey => [
+                        'type'  => 'array',
+                        'items' => ['$ref' => '#/components/schemas/' . $schemaName . 'Response'],
+                    ],
+                    'meta'    => ['$ref' => '#/components/schemas/PaginationMeta'],
+                    'links'   => ['$ref' => '#/components/schemas/PaginationLinks'],
+                ],
+            ];
+        }
 
         return array_merge($base, [
             'summary'     => 'List all ' . $pluralName,
@@ -146,17 +164,7 @@ class PathBuilder
                     'description' => 'Paginated list of ' . $pluralName,
                     'content'     => [
                         'application/json' => [
-                            'schema' => [
-                                'type'       => 'object',
-                                'properties' => [
-                                    $itemsKey => [
-                                        'type'  => 'array',
-                                        'items' => ['$ref' => '#/components/schemas/' . $schemaName . 'Response'],
-                                    ],
-                                    'meta'    => ['$ref' => '#/components/schemas/PaginationMeta'],
-                                    'links'   => ['$ref' => '#/components/schemas/PaginationLinks'],
-                                ],
-                            ],
+                            'schema' => $indexSchema,
                         ],
                     ],
                 ],

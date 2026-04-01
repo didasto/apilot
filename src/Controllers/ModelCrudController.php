@@ -79,8 +79,11 @@ abstract class ModelCrudController extends BaseCrudController
 
         $normalizedData = $this->transformResponse($normalizedData, 'index', $request);
 
+        if ($mode === 'none') {
+            return new JsonResponse($normalizedData['items'] ?? [], $this->getStatusCode('index'));
+        }
+
         $itemsKey = match ($mode) {
-            'none'  => 'items',
             'named' => $this->resolveWrapperKey(),
             default => 'data',
         };

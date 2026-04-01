@@ -47,10 +47,13 @@ abstract class ServiceCrudController extends BaseCrudController
 
         $mode = $this->resolveWrapperMode();
 
+        if ($mode === 'none') {
+            return new JsonResponse($normalizedData['items'] ?? [], $this->getStatusCode('index'));
+        }
+
         // ServiceCrudController always builds the response manually (no Eloquent paginator).
         // In 'laravel' mode we simulate Laravel's default by using 'data' as the items key.
         $itemsKey = match ($mode) {
-            'none'  => 'items',
             'named' => $this->resolveWrapperKey(),
             default => 'data',
         };

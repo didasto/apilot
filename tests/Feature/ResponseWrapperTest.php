@@ -157,7 +157,7 @@ class ResponseWrapperTest extends TestCase
         $this->assertEquals('Updated Post', $data['title']);
     }
 
-    public function testEmptyArrayWrapperIndexUsesItemsKey(): void
+    public function testEmptyArrayWrapperIndexReturnsPlainArray(): void
     {
         config()->set('apilot.response_wrapper', []);
         Post::factory()->count(5)->create();
@@ -166,11 +166,12 @@ class ResponseWrapperTest extends TestCase
 
         $response->assertStatus(200);
         $data = $response->json();
-        $this->assertArrayHasKey('items', $data);
-        $this->assertArrayHasKey('meta', $data);
-        $this->assertArrayHasKey('links', $data);
+        $this->assertIsArray($data);
+        // Plain JSON array — no wrapper keys, no meta, no links
+        $this->assertArrayNotHasKey('items', $data);
         $this->assertArrayNotHasKey('data', $data);
-        $this->assertIsArray($data['items']);
+        $this->assertArrayNotHasKey('meta', $data);
+        $this->assertArrayNotHasKey('links', $data);
     }
 
     public function testEmptyArrayWrapperIndexItemsContainsPosts(): void
@@ -182,12 +183,25 @@ class ResponseWrapperTest extends TestCase
 
         $response->assertStatus(200);
         $data = $response->json();
-        $this->assertCount(3, $data['items']);
-        $this->assertArrayHasKey('id', $data['items'][0]);
-        $this->assertArrayHasKey('title', $data['items'][0]);
+        $this->assertCount(3, $data);
+        $this->assertArrayHasKey('id', $data[0]);
+        $this->assertArrayHasKey('title', $data[0]);
     }
 
-    public function testEmptyArrayWrapperIndexMetaIsCorrect(): void
+    public function testEmptyArrayWrapperIndexReturnsAllItems(): void
+    {
+        config()->set('apilot.response_wrapper', []);
+        Post::factory()->count(7)->create();
+
+        $response = $this->getJson('api/posts');
+
+        $response->assertStatus(200);
+        $data = $response->json();
+        $this->assertIsArray($data);
+        $this->assertCount(7, $data);
+    }
+
+    public function testEmptyArrayWrapperIndexStillRespectsPagination(): void
     {
         config()->set('apilot.response_wrapper', []);
         Post::factory()->count(20)->create();
@@ -195,44 +209,9 @@ class ResponseWrapperTest extends TestCase
         $response = $this->getJson('api/posts?per_page=5');
 
         $response->assertStatus(200);
-        $response->assertJsonPath('meta.total', 20);
-        $response->assertJsonPath('meta.last_page', 4);
-        $response->assertJsonPath('meta.per_page', 5);
-        $response->assertJsonPath('meta.current_page', 1);
-    }
-
-    public function testEmptyArrayWrapperIndexLinksAreCorrect(): void
-    {
-        config()->set('apilot.response_wrapper', []);
-        Post::factory()->count(20)->create();
-
-        $response = $this->getJson('api/posts?per_page=5&page=2');
-
-        $response->assertStatus(200);
-        $this->assertNotNull($response->json('links.prev'));
-        $this->assertNotNull($response->json('links.next'));
-    }
-
-    public function testEmptyArrayWrapperIndexPage1HasNoPrev(): void
-    {
-        config()->set('apilot.response_wrapper', []);
-        Post::factory()->count(20)->create();
-
-        $response = $this->getJson('api/posts?per_page=5&page=1');
-
-        $response->assertStatus(200);
-        $this->assertNull($response->json('links.prev'));
-    }
-
-    public function testEmptyArrayWrapperIndexLastPageHasNoNext(): void
-    {
-        config()->set('apilot.response_wrapper', []);
-        Post::factory()->count(10)->create();
-
-        $response = $this->getJson('api/posts?per_page=5&page=2');
-
-        $response->assertStatus(200);
-        $this->assertNull($response->json('links.next'));
+        $data = $response->json();
+        $this->assertIsArray($data);
+        $this->assertCount(5, $data);
     }
 
     // =========================================================================
@@ -520,10 +499,11 @@ class ResponseWrapperTest extends TestCase
 
         $response->assertStatus(200);
         $data = $response->json();
-        $this->assertArrayHasKey('items', $data);
-        $this->assertArrayHasKey('meta', $data);
-        $this->assertArrayHasKey('links', $data);
+        $this->assertIsArray($data);
+        $this->assertArrayNotHasKey('items', $data);
         $this->assertArrayNotHasKey('data', $data);
+        $this->assertArrayNotHasKey('meta', $data);
+        $this->assertArrayNotHasKey('links', $data);
     }
 
     public function testServiceControllerNamedWrapperShow(): void
@@ -609,9 +589,10 @@ class ResponseWrapperTest extends TestCase
         $this->assertArrayHasKey('$ref', $showSchema);
         $this->assertArrayNotHasKey('properties', $showSchema);
 
-        // Index: "items" key
-        $this->assertArrayHasKey('items', $indexSchema['properties']);
-        $this->assertArrayNotHasKey('data', $indexSchema['properties']);
+        // Index: plain array schema
+        $this->assertEquals('array', $indexSchema['type']);
+        $this->assertArrayHasKey('items', $indexSchema);
+        $this->assertArrayNotHasKey('properties', $indexSchema);
     }
 
     public function testOpenApiSpecReflectsNullWrapper(): void
