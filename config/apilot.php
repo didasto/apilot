@@ -51,10 +51,19 @@ return [
 
     /*
     |--------------------------------------------------------------------------
-    | Default Response Wrapper
+    | Response Wrapper
     |--------------------------------------------------------------------------
     | Der Key, unter dem Daten im JSON-Response gewrapped werden.
-    | null = kein Wrapping (Laravel-Resource-Default wird genutzt).
+    |
+    | 'data'   → { "data": { ... } }          (Default, Laravel-Standard)
+    | 'result' → { "result": { ... } }        (Custom Wrapper-Key)
+    | null     → { "id": 1, ... }             (Kein Wrapping für Single-Items)
+    |             { "items": [...], "meta": {...}, "links": {...} }
+    |             (Paginierte Responses nutzen "items" als Key)
+    |
+    | HINWEIS: Diese Einstellung betrifft ausschließlich die Responses der
+    | Apilot-Controller (ModelCrudController und ServiceCrudController),
+    | nicht andere JsonResources in der Applikation.
     */
     'response_wrapper' => 'data',
 

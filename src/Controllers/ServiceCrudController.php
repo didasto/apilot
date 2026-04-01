@@ -6,7 +6,6 @@ namespace Didasto\Apilot\Controllers;
 
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Http\Resources\Json\JsonResource;
 use LogicException;
 use Didasto\Apilot\Contracts\CrudServiceInterface;
 use Didasto\Apilot\Dto\PaginatedResult;
@@ -43,10 +42,10 @@ abstract class ServiceCrudController extends BaseCrudController
         $result = $service->list($filters, $sorting, $pagination);
         $result = $this->afterIndex($result, $request);
 
-        $data = $this->buildPaginatedResponse($result, $request);
-        $data = $this->transformResponse($data, 'index', $request);
+        $normalizedData = $this->buildPaginatedResponse($result, $request);
+        $normalizedData = $this->transformResponse($normalizedData, 'index', $request);
 
-        return new JsonResponse($data, $this->getStatusCode('index'));
+        return new JsonResponse($this->wrapCollectionData($normalizedData), $this->getStatusCode('index'));
     }
 
     public function show(Request $request, int|string $id): JsonResponse
@@ -62,10 +61,10 @@ abstract class ServiceCrudController extends BaseCrudController
         $item = $this->afterShow($item, $request);
 
         $resourceClass = $this->resolveResourceClass();
-        $data = new $resourceClass($item);
-        $data = $this->transformResponse($data, 'show', $request);
+        $resolved = (new $resourceClass($item))->resolve($request);
+        $resolved = $this->transformResponse($resolved, 'show', $request);
 
-        return $this->toJsonResponse($data, $this->getStatusCode('show'));
+        return new JsonResponse($this->wrapItemData($resolved), $this->getStatusCode('show'));
     }
 
     public function store(Request $request): JsonResponse
@@ -78,10 +77,10 @@ abstract class ServiceCrudController extends BaseCrudController
         $item = $this->afterStore($item, $request);
 
         $resourceClass = $this->resolveResourceClass();
-        $data = new $resourceClass($item);
-        $data = $this->transformResponse($data, 'store', $request);
+        $resolved = (new $resourceClass($item))->resolve($request);
+        $resolved = $this->transformResponse($resolved, 'store', $request);
 
-        return $this->toJsonResponse($data, $this->getStatusCode('store'));
+        return new JsonResponse($this->wrapItemData($resolved), $this->getStatusCode('store'));
     }
 
     public function update(Request $request, int|string $id): JsonResponse
@@ -100,10 +99,10 @@ abstract class ServiceCrudController extends BaseCrudController
         $item = $this->afterUpdate($item, $request);
 
         $resourceClass = $this->resolveResourceClass();
-        $data = new $resourceClass($item);
-        $data = $this->transformResponse($data, 'update', $request);
+        $resolved = (new $resourceClass($item))->resolve($request);
+        $resolved = $this->transformResponse($resolved, 'update', $request);
 
-        return $this->toJsonResponse($data, $this->getStatusCode('update'));
+        return new JsonResponse($this->wrapItemData($resolved), $this->getStatusCode('update'));
     }
 
     public function destroy(Request $request, int|string $id): JsonResponse
@@ -143,15 +142,6 @@ abstract class ServiceCrudController extends BaseCrudController
         }
 
         return $service;
-    }
-
-    protected function toJsonResponse(mixed $data, int $status): JsonResponse
-    {
-        if ($data instanceof JsonResource) {
-            return $data->response()->setStatusCode($status);
-        }
-
-        return new JsonResponse($data, $status);
     }
 
     protected function extractFilters(Request $request): array
@@ -273,13 +263,13 @@ abstract class ServiceCrudController extends BaseCrudController
     protected function buildPaginatedResponse(PaginatedResult $result, Request $request): array
     {
         $resourceClass = $this->resolveResourceClass();
-        $items = array_map(fn (mixed $item) => (new $resourceClass($item))->resolve(), $result->items);
+        $items = array_map(fn (mixed $item) => (new $resourceClass($item))->resolve($request), $result->items);
 
-        $lastPage = $result->lastPage();
+        $lastPage    = $result->lastPage();
         $currentPage = $result->currentPage;
 
         return [
-            'data'  => $items,
+            'items' => $items,
             'meta'  => [
                 'current_page' => $currentPage,
                 'last_page'    => $lastPage,

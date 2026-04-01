@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Didasto\Apilot\Controllers;
 
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Resources\Json\JsonResource;
 use Illuminate\Routing\Controller;
 use LogicException;
@@ -57,5 +58,29 @@ abstract class BaseCrudController extends Controller
         }
 
         return $this->resourceClass ?? DefaultResource::class;
+    }
+
+    protected function wrapItemData(mixed $resolved): mixed
+    {
+        $wrapper = config('apilot.response_wrapper');
+
+        if ($wrapper === null) {
+            return $resolved;
+        }
+
+        return [$wrapper => $resolved];
+    }
+
+    protected function wrapCollectionData(mixed $normalizedData): array
+    {
+        $wrapper    = config('apilot.response_wrapper');
+        $wrapperKey = $wrapper ?? 'items';
+        $data       = is_array($normalizedData) ? $normalizedData : [];
+
+        return [
+            $wrapperKey => $data['items'] ?? [],
+            'meta'      => $data['meta'] ?? [],
+            'links'     => $data['links'] ?? [],
+        ];
     }
 }

@@ -130,6 +130,9 @@ class PathBuilder
             $parameters[] = $filterParam;
         }
 
+        $wrapper    = config('apilot.response_wrapper');
+        $itemsKey   = $wrapper ?? 'items';
+
         return array_merge($base, [
             'summary'     => 'List all ' . $pluralName,
             'operationId' => $entry->resourceName . '.index',
@@ -142,12 +145,12 @@ class PathBuilder
                             'schema' => [
                                 'type'       => 'object',
                                 'properties' => [
-                                    'data'  => [
+                                    $itemsKey => [
                                         'type'  => 'array',
                                         'items' => ['$ref' => '#/components/schemas/' . $schemaName . 'Response'],
                                     ],
-                                    'meta'  => ['$ref' => '#/components/schemas/PaginationMeta'],
-                                    'links' => ['$ref' => '#/components/schemas/PaginationLinks'],
+                                    'meta'    => ['$ref' => '#/components/schemas/PaginationMeta'],
+                                    'links'   => ['$ref' => '#/components/schemas/PaginationLinks'],
                                 ],
                             ],
                         ],
@@ -161,6 +164,18 @@ class PathBuilder
     protected function buildShowOp(RouteEntry $entry, string $schemaName, array $base): array
     {
         $singularName = Str::singular(Str::studly($entry->resourceName));
+        $wrapper      = config('apilot.response_wrapper');
+
+        if ($wrapper === null) {
+            $responseSchema = ['$ref' => '#/components/schemas/' . $schemaName . 'Response'];
+        } else {
+            $responseSchema = [
+                'type'       => 'object',
+                'properties' => [
+                    $wrapper => ['$ref' => '#/components/schemas/' . $schemaName . 'Response'],
+                ],
+            ];
+        }
 
         return array_merge($base, [
             'summary'     => 'Get a single ' . $singularName,
@@ -178,12 +193,7 @@ class PathBuilder
                     'description' => 'Single ' . $singularName . ' resource',
                     'content'     => [
                         'application/json' => [
-                            'schema' => [
-                                'type'       => 'object',
-                                'properties' => [
-                                    'data' => ['$ref' => '#/components/schemas/' . $schemaName . 'Response'],
-                                ],
-                            ],
+                            'schema' => $responseSchema,
                         ],
                     ],
                 ],
@@ -196,6 +206,18 @@ class PathBuilder
     protected function buildStoreOp(RouteEntry $entry, string $schemaName, array $base, ?string $storeSchemaRef): array
     {
         $singularName = Str::singular(Str::studly($entry->resourceName));
+        $wrapper      = config('apilot.response_wrapper');
+
+        if ($wrapper === null) {
+            $responseSchema = ['$ref' => '#/components/schemas/' . $schemaName . 'Response'];
+        } else {
+            $responseSchema = [
+                'type'       => 'object',
+                'properties' => [
+                    $wrapper => ['$ref' => '#/components/schemas/' . $schemaName . 'Response'],
+                ],
+            ];
+        }
 
         return array_merge($base, [
             'summary'     => 'Create a new ' . $singularName,
@@ -206,12 +228,7 @@ class PathBuilder
                     'description' => 'Created ' . $singularName . ' resource',
                     'content'     => [
                         'application/json' => [
-                            'schema' => [
-                                'type'       => 'object',
-                                'properties' => [
-                                    'data' => ['$ref' => '#/components/schemas/' . $schemaName . 'Response'],
-                                ],
-                            ],
+                            'schema' => $responseSchema,
                         ],
                     ],
                 ],
@@ -224,6 +241,18 @@ class PathBuilder
     protected function buildUpdateOp(RouteEntry $entry, string $schemaName, array $base, ?string $updateSchemaRef): array
     {
         $singularName = Str::singular(Str::studly($entry->resourceName));
+        $wrapper      = config('apilot.response_wrapper');
+
+        if ($wrapper === null) {
+            $responseSchema = ['$ref' => '#/components/schemas/' . $schemaName . 'Response'];
+        } else {
+            $responseSchema = [
+                'type'       => 'object',
+                'properties' => [
+                    $wrapper => ['$ref' => '#/components/schemas/' . $schemaName . 'Response'],
+                ],
+            ];
+        }
 
         return array_merge($base, [
             'summary'     => 'Update an existing ' . $singularName,
@@ -242,12 +271,7 @@ class PathBuilder
                     'description' => 'Updated ' . $singularName . ' resource',
                     'content'     => [
                         'application/json' => [
-                            'schema' => [
-                                'type'       => 'object',
-                                'properties' => [
-                                    'data' => ['$ref' => '#/components/schemas/' . $schemaName . 'Response'],
-                                ],
-                            ],
+                            'schema' => $responseSchema,
                         ],
                     ],
                 ],

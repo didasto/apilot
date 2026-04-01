@@ -20,10 +20,12 @@ class HookedPostController extends ModelCrudController
     protected array $allowedSorts = ['title', 'created_at'];
 
     public static array $hooksCalled = [];
+    public static mixed $lastTransformResponseData = null;
 
     public static function resetHooks(): void
     {
         static::$hooksCalled = [];
+        static::$lastTransformResponseData = null;
     }
 
     protected function modifyIndexQuery(mixed $query, Request $request): mixed
@@ -81,6 +83,7 @@ class HookedPostController extends ModelCrudController
     protected function transformResponse(mixed $data, string $action, Request $request): mixed
     {
         static::$hooksCalled[] = "transformResponse:{$action}";
+        static::$lastTransformResponseData = $data;
 
         return $data;
     }

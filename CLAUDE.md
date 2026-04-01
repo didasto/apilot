@@ -1,4 +1,4 @@
-# Prompt: Apilot — Usability Verbesserungen
+# Prompt: Apilot — Response Wrapper Config Fix
 
 ## Entwicklungsumgebung
 
@@ -13,1026 +13,323 @@ docker run --rm -v $(pwd):/app -w /app composer php ./vendor/bin/phpunit
 
 ## Voraussetzung
 
-Das Package `didasto/apilot` ist vollständig implementiert mit Namespace `Didasto\Apilot`. Alle Tests sind grün. Die Dokumentation liegt im `docs/`-Verzeichnis.
+Das Package `didasto/apilot` ist vollständig implementiert mit Namespace `Didasto\Apilot`. Alle Tests sind grün.
 
 **Lies den gesamten bestehenden Code im Package, bevor du Änderungen vornimmst.** Alle bestehenden Tests müssen weiterhin grün bleiben.
 
 ---
 
-## Übersicht der Änderungen
+## Problem
 
-Es gibt 4 Verbesserungen:
-
-1. **Route-Attribute** — Routen direkt am Controller per PHP-Attribut definieren statt in einer separaten `routes/api.php`.
-2. **Service-Interface mit Defaults** — `CrudServiceInterface` soll Default-Implementierungen mit "Not Implemented"-Exceptions bekommen, damit nur die tatsächlich genutzten Methoden überschrieben werden müssen.
-3. **Getrennte FormRequests für Store und Update** — Statt einer einzigen `$formRequestClass` soll es separate `$storeRequestClass` und `$updateRequestClass` geben.
-4. **OpenAPI Required-Fields Fix** — `required`-Felder aus FormRequests müssen korrekt in der OpenAPI-Spec erscheinen.
+Die Config-Option `response_wrapper` in `config/apilot.php` wird aktuell **nicht ausgewertet**. Egal ob `null` oder ein String gesetzt ist — Laravel `JsonResource` wrapped die Response immer in `"data"`, weil `JsonResource::wrap()` / `JsonResource::withoutWrapping()` nie aufgerufen wird.
 
 ---
 
-## 1. Route-Attribute (`#[ApiResource]`)
+## Erwartetes Verhalten
 
-### Konzept
+| Config-Wert | Verhalten |
+|---|---|
+| `'response_wrapper' => 'data'` | Response wrapped in `"data"` (Laravel-Default) |
+| `'response_wrapper' => 'result'` | Response wrapped in `"result"` |
+| `'response_wrapper' => null` | Kein Wrapping — Items direkt auf Top-Level |
 
-Statt Routen in einer separaten `routes/api.php` über den `CrudRouteRegistrar` zu definieren, soll der Nutzer die Routen direkt am Controller per PHP-Attribut deklarieren können. **Beide Wege sollen parallel funktionieren** — der `CrudRouteRegistrar` bleibt bestehen, das Attribut ist eine zusätzliche Option.
+### Beispiel: `response_wrapper => null`, Index-Response
 
-### Neue Datei: `src/Attributes/ApiResource.php`
-
-```php
-namespace Didasto\Apilot\Attributes;
-
-use Attribute;
-
-#[Attribute(Attribute::TARGET_CLASS)]
-final class ApiResource
-{
-    /**
-     * @param string $path                    — URI-Pfad der Resource (z.B. '/posts', '/api/v1/comments')
-     * @param array<int, string>|null $only   — Nur diese Actions registrieren. null = alle.
-     * @param array<int, string>|null $except — Diese Actions ausschließen. null = keine.
-     * @param string|null $name               — Route-Name-Prefix (z.B. 'api.v1.posts'). null = auto-generiert.
-     * @param array<int, string> $middleware   — Zusätzliche Middleware für diese Resource.
-     */
-    public function __construct(
-        public readonly string $path,
-        public readonly ?array $only = null,
-        public readonly ?array $except = null,
-        public readonly ?string $name = null,
-        public readonly array $middleware = [],
-    ) {}
-}
+```json
+[
+    { "id": 1, "title": "Post 1" },
+    { "id": 2, "title": "Post 2" }
+]
 ```
 
-### Verwendung durch den Nutzer
+Aber: **Pagination-Meta und Links müssen weiterhin verfügbar sein.** Bei `null` sollen `meta` und `links` als Response-Headers oder als Top-Level-Keys neben dem Array übertragen werden. Da ein JSON-Array keine zusätzlichen Keys haben kann, gibt es zwei sinnvolle Optionen:
 
-```php
-namespace App\Http\Controllers\Api;
+**Option A (empfohlen): Envelope-Stil auch ohne Wrapper**
 
-use Didasto\Apilot\Attributes\ApiResource;
-use Didasto\Apilot\Controllers\ModelCrudController;
-use App\Models\Post;
+Bei paginierten Responses (`index`) wird trotzdem ein Objekt zurückgegeben, aber die Items liegen direkt unter einem konfigurierbaren Key oder sind die einzigen Daten:
 
-#[ApiResource(
-    path: '/posts',
-    only: ['index', 'show', 'store'],
-    name: 'api.v1.posts',
-    middleware: ['auth:sanctum'],
-)]
-class PostController extends ModelCrudController
+```json
 {
-    protected string $model = Post::class;
-    protected ?string $storeRequestClass = \App\Http\Requests\StorePostRequest::class;
-    protected ?string $resourceClass = \App\Http\Resources\PostResource::class;
-}
-```
-
-```php
-// Minimale Variante — alle CRUD-Routen, keine Extra-Middleware, Auto-Name
-#[ApiResource(path: '/tags')]
-class TagController extends ModelCrudController
-{
-    protected string $model = Tag::class;
-}
-```
-
-```php
-// ServiceCrudController mit Attribut
-#[ApiResource(path: '/external-products', only: ['index', 'show'])]
-class ExternalProductController extends ServiceCrudController
-{
-    protected string $serviceClass = ExternalProductService::class;
-}
-```
-
-### Neue Datei: `src/Routing/AttributeRouteRegistrar.php`
-
-Diese Klasse scannt Controller-Klassen nach dem `#[ApiResource]`-Attribut und registriert die Routen.
-
-```php
-namespace Didasto\Apilot\Routing;
-
-class AttributeRouteRegistrar
-{
-    public function __construct(
-        private readonly RouteRegistry $registry,
-    ) {}
-
-    /**
-     * Scannt die angegebenen Controller-Klassen nach #[ApiResource] Attributen
-     * und registriert die Routen.
-     *
-     * @param array<int, string> $controllerClasses — Vollqualifizierte Klassennamen
-     */
-    public function register(array $controllerClasses): void
-    {
-        foreach ($controllerClasses as $controllerClass) {
-            $this->registerController($controllerClass);
-        }
-    }
-
-    /**
-     * Scannt ein Verzeichnis nach Controller-Klassen mit #[ApiResource] Attribut.
-     *
-     * @param string $directory — Absoluter Pfad zum Verzeichnis (z.B. app_path('Http/Controllers/Api'))
-     * @param string $namespace — Basis-Namespace (z.B. 'App\\Http\\Controllers\\Api')
-     */
-    public function registerDirectory(string $directory, string $namespace): void
-    {
-        // 1. Alle .php-Dateien im Verzeichnis finden (rekursiv)
-        // 2. Klassenname aus Dateiname + Namespace ableiten
-        // 3. Prüfen ob die Klasse das #[ApiResource] Attribut hat
-        // 4. Wenn ja: registerController() aufrufen
-    }
-
-    private function registerController(string $controllerClass): void
-    {
-        $reflection = new \ReflectionClass($controllerClass);
-        $attributes = $reflection->getAttributes(ApiResource::class);
-
-        if (empty($attributes)) {
-            return;
-        }
-
-        $apiResource = $attributes[0]->newInstance();
-
-        // Aktive Actions ermitteln (analog zum CrudRouteRegistrar)
-        $allActions = ['index', 'show', 'store', 'update', 'destroy'];
-
-        if ($apiResource->only !== null) {
-            $actions = array_intersect($allActions, $apiResource->only);
-        } elseif ($apiResource->except !== null) {
-            $actions = array_diff($allActions, $apiResource->except);
-        } else {
-            $actions = $allActions;
-        }
-
-        // Resource-Name aus dem Pfad ableiten (z.B. '/posts' → 'posts', '/api/v1/comments' → 'comments')
-        $resourceName = trim(basename($apiResource->path), '/');
-
-        // Route-Name generieren wenn nicht angegeben
-        $routeName = $apiResource->name ?? $resourceName;
-
-        // Prefix aus dem Pfad ableiten: Alles vor dem letzten Segment
-        // '/posts' → prefix = config('apilot.prefix')
-        // '/api/v1/posts' → prefix = 'api/v1'
-        $pathSegments = explode('/', trim($apiResource->path, '/'));
-        if (count($pathSegments) > 1) {
-            $prefix = implode('/', array_slice($pathSegments, 0, -1));
-        } else {
-            $prefix = config('apilot.prefix', 'api');
-        }
-
-        // Middleware: Globale Config-Middleware + per-Resource-Middleware
-        $middleware = array_merge(
-            config('apilot.middleware', ['api']),
-            $apiResource->middleware,
-        );
-
-        // Routen registrieren (analog zum CrudRouteRegistrar)
-        // Nutze Laravel's Route-Facade
-        \Illuminate\Support\Facades\Route::prefix($prefix)
-            ->middleware($middleware)
-            ->group(function () use ($controllerClass, $resourceName, $actions, $routeName) {
-                foreach ($actions as $action) {
-                    // Registriere die Route je nach Action
-                    // z.B. Route::get($resourceName, [$controllerClass, 'index'])->name("{$routeName}.index")
-                    // Gleiche Logik wie im bestehenden CrudRouteRegistrar
-                }
-            });
-
-        // In der RouteRegistry registrieren (für OpenAPI-Generierung)
-        $this->registry->register(new RouteEntry(
-            resourceName: $resourceName,
-            controllerClass: $controllerClass,
-            actions: array_values($actions),
-            middleware: $middleware,
-            prefix: $prefix,
-        ));
-    }
-}
-```
-
-### Anpassung des ServiceProviders
-
-Der `ApilotServiceProvider` soll den `AttributeRouteRegistrar` als Singleton registrieren und optional automatisches Scanning ermöglichen.
-
-Füge eine neue Config-Option hinzu:
-
-```php
-// In config/apilot.php
-'auto_discover' => [
-    /*
-    | Aktiviert das automatische Scannen von Controller-Verzeichnissen
-    | nach #[ApiResource] Attributen.
-    */
-    'enabled' => false,
-
-    /*
-    | Verzeichnisse die gescannt werden sollen.
-    | Jeder Eintrag ist ein Array mit 'directory' und 'namespace'.
-    */
-    'directories' => [
-        [
-            'directory' => app_path('Http/Controllers/Api'),
-            'namespace' => 'App\\Http\\Controllers\\Api',
-        ],
+    "items": [
+        { "id": 1, "title": "Post 1" },
+        { "id": 2, "title": "Post 2" }
     ],
-],
-```
-
-Im ServiceProvider (boot-Methode):
-
-```php
-if (config('apilot.auto_discover.enabled', false)) {
-    $registrar = app(AttributeRouteRegistrar::class);
-    foreach (config('apilot.auto_discover.directories', []) as $entry) {
-        $registrar->registerDirectory($entry['directory'], $entry['namespace']);
-    }
+    "meta": { "current_page": 1, "last_page": 3, "per_page": 15, "total": 7 },
+    "links": { "first": "...", "last": "...", "prev": null, "next": "..." }
 }
 ```
 
-### Nutzung ohne Auto-Discovery
+Nein — das wäre wieder ein Wrapper unter anderem Namen. Stattdessen:
 
-Der Nutzer kann den `AttributeRouteRegistrar` auch manuell nutzen, z.B. in einem ServiceProvider oder in `routes/api.php`:
+**Option B (umsetzen): Controller baut die Response manuell**
 
-```php
-// In AppServiceProvider::boot() oder routes/api.php
-use Didasto\Apilot\Routing\AttributeRouteRegistrar;
+Für `response_wrapper => null`:
 
-app(AttributeRouteRegistrar::class)->register([
-    \App\Http\Controllers\Api\PostController::class,
-    \App\Http\Controllers\Api\TagController::class,
-]);
+- **Index (paginiert):** Die Response ist ein Objekt, Items liegen **ohne Key-Wrapper** neben `meta` und `links`:
+
+```json
+{
+    "items": [...],
+    "meta": {...},
+    "links": {...}
+}
 ```
 
-Oder mit Directory-Scan:
+Nein — das ist genau das gleiche Problem. Der sauberste Ansatz:
 
-```php
-app(AttributeRouteRegistrar::class)->registerDirectory(
-    app_path('Http/Controllers/Api'),
-    'App\\Http\\Controllers\\Api',
-);
-```
+**Tatsächliche Umsetzung:**
 
-### Wichtig
+Die Controller (`ModelCrudController` und `ServiceCrudController`) sollen die Response **nicht** über `JsonResource::collection()` und `JsonResource::make()` bauen, wenn sie den Wrapper kontrollieren müssen. Stattdessen soll der Controller die Response manuell zusammenbauen.
 
-- **Beide Wege (Attribut + CrudRouteRegistrar) müssen parallel funktionieren.** Der CrudRouteRegistrar bleibt unverändert.
-- **OpenAPI-Generierung:** Der `AttributeRouteRegistrar` nutzt dieselbe `RouteRegistry` wie der `CrudRouteRegistrar`. Die OpenAPI-Generierung funktioniert daher automatisch für beide Wege.
-- **Priorität:** Wenn dieselbe Resource sowohl über Attribut als auch über CrudRouteRegistrar registriert wird, werden die Routen doppelt registriert (kein Schutz dagegen nötig, aber kein Crash).
+### Konkretes Verhalten:
+
+#### Single-Resource Responses (show, store, update):
+
+| Config | Response |
+|---|---|
+| `'response_wrapper' => 'data'` | `{ "data": { "id": 1, ... } }` |
+| `'response_wrapper' => 'result'` | `{ "result": { "id": 1, ... } }` |
+| `'response_wrapper' => null` | `{ "id": 1, ... }` |
+
+#### Collection Responses (index):
+
+| Config | Response |
+|---|---|
+| `'response_wrapper' => 'data'` | `{ "data": [...], "meta": {...}, "links": {...} }` |
+| `'response_wrapper' => 'result'` | `{ "result": [...], "meta": {...}, "links": {...} }` |
+| `'response_wrapper' => null` | `{ "items": [...], "meta": {...}, "links": {...} }` |
+
+**Bei `null` wird für paginierte Responses der Key `items` als Fallback genutzt**, weil `meta` und `links` sonst nicht transportiert werden können. Dieses Verhalten soll in der Config dokumentiert sein.
 
 ---
 
-## 2. Service-Interface mit Defaults
+## Änderungen
 
-### Problem
+### 1. `ApilotServiceProvider` — Wrapper-Konfiguration anwenden
 
-Aktuell muss ein Service, der `CrudServiceInterface` implementiert, **alle 5 Methoden** implementieren — auch wenn der Controller nur `index` und `show` nutzt. Das erzeugt unnötigen Boilerplate.
-
-### Lösung
-
-Ersetze das `CrudServiceInterface` durch eine Kombination aus Interface + abstrakte Basisklasse. Das Interface bleibt für Type-Hinting bestehen, die abstrakte Klasse liefert Default-Implementierungen die eine `NotImplementedException` werfen.
-
-### Neue Datei: `src/Exceptions/NotImplementedException.php`
+In der `boot()`-Methode des ServiceProviders:
 
 ```php
-namespace Didasto\Apilot\Exceptions;
+$wrapper = config('apilot.response_wrapper');
 
-use Illuminate\Http\JsonResponse;
-
-class NotImplementedException extends \RuntimeException
-{
-    public function __construct(string $method)
-    {
-        parent::__construct(
-            sprintf('Method %s is not implemented.', $method)
-        );
-    }
-
-    public function render(): JsonResponse
-    {
-        return new JsonResponse(
-            data: [
-                'error' => [
-                    'message' => $this->getMessage(),
-                    'status'  => 501,
-                ],
-            ],
-            status: 501,
-        );
-    }
+if ($wrapper === null) {
+    \Illuminate\Http\Resources\Json\JsonResource::withoutWrapping();
+} else {
+    \Illuminate\Http\Resources\Json\JsonResource::wrap($wrapper);
 }
 ```
 
-### Neue Datei: `src/Services/AbstractCrudService.php`
+**Achtung:** `JsonResource::withoutWrapping()` und `::wrap()` sind **globale** Einstellungen — sie betreffen ALLE JsonResources in der gesamten Laravel-App. Das muss in der Doku klar kommuniziert werden.
 
-```php
-namespace Didasto\Apilot\Services;
+### 2. Controller-Methoden — Manuelle Response-Erstellung bei `null`-Wrapper
 
-use Didasto\Apilot\Contracts\CrudServiceInterface;
-use Didasto\Apilot\Dto\PaginatedResult;
-use Didasto\Apilot\Dto\PaginationParams;
-use Didasto\Apilot\Exceptions\NotImplementedException;
+Da `JsonResource::withoutWrapping()` bei Collections die `meta` und `links` Keys entfernt (Laravel gibt dann nur das nackte Array zurück), müssen die Controller bei paginierten Responses manuell eingreifen.
 
-abstract class AbstractCrudService implements CrudServiceInterface
-{
-    public function list(array $filters, array $sorting, PaginationParams $pagination): PaginatedResult
-    {
-        throw new NotImplementedException(static::class . '::list');
-    }
-
-    public function find(int|string $id): mixed
-    {
-        throw new NotImplementedException(static::class . '::find');
-    }
-
-    public function create(array $data): mixed
-    {
-        throw new NotImplementedException(static::class . '::create');
-    }
-
-    public function update(int|string $id, array $data): mixed
-    {
-        throw new NotImplementedException(static::class . '::update');
-    }
-
-    public function delete(int|string $id): bool
-    {
-        throw new NotImplementedException(static::class . '::delete');
-    }
-}
-```
-
-### Anpassung des `CrudServiceInterface`
-
-Das Interface bleibt **unverändert**. Es dient weiterhin als Vertrag. Die `AbstractCrudService` implementiert es mit Defaults.
-
-### Auswirkung auf den Nutzer
-
-**Vorher (muss alle implementieren):**
-
-```php
-class ExternalProductService implements CrudServiceInterface
-{
-    public function list(...): PaginatedResult { /* Logik */ }
-    public function find(...): mixed { /* Logik */ }
-    public function create(...): mixed { throw new \Exception('Not supported'); }
-    public function update(...): mixed { throw new \Exception('Not supported'); }
-    public function delete(...): bool { throw new \Exception('Not supported'); }
-}
-```
-
-**Nachher (nur das implementieren was gebraucht wird):**
-
-```php
-use Didasto\Apilot\Services\AbstractCrudService;
-
-class ExternalProductService extends AbstractCrudService
-{
-    public function list(array $filters, array $sorting, PaginationParams $pagination): PaginatedResult
-    {
-        // Nur diese Methode wird gebraucht
-    }
-
-    public function find(int|string $id): mixed
-    {
-        // Und diese
-    }
-
-    // create, update, delete müssen NICHT überschrieben werden.
-    // Wenn sie aufgerufen werden, kommt automatisch ein 501 Not Implemented.
-}
-```
-
-### Wichtig
-
-- **Das bestehende `CrudServiceInterface` bleibt unverändert.** Bestehende Services die das Interface direkt implementieren funktionieren weiterhin.
-- **`AbstractCrudService` ist optional.** Nutzer können weiterhin das Interface direkt implementieren.
-- **Der `ServiceCrudController` muss keine Änderung erfahren** — er prüft weiterhin gegen `CrudServiceInterface`. Die `NotImplementedException` wird vom Exception-Handler als 501-Response gerendert.
-- **Bestehende Tests dürfen nicht brechen.**
-
----
-
-## 3. Getrennte FormRequests für Store und Update
-
-### Problem
-
-Aktuell gibt es nur eine einzige `$formRequestClass` für beide Operationen (store und update). In der Praxis haben Store und Update oft unterschiedliche Regeln:
-
-- **Store:** `title` ist required, `published_at` ist required
-- **Update:** Nur `image` und `published_at` dürfen geändert werden, `title` ist gar nicht erlaubt
-
-### Lösung
-
-Führe zwei neue Properties ein: `$storeRequestClass` und `$updateRequestClass`. Die bestehende `$formRequestClass` bleibt als Fallback.
-
-### Änderungen am `ModelCrudController` und `ServiceCrudController`
-
-Füge folgende Properties hinzu:
+Erstelle eine gemeinsame Methode in einem Trait oder einer Basisklasse, die von beiden Controllern genutzt wird:
 
 ```php
 /**
- * FormRequest-Klasse speziell für die store-Action.
- * Hat Vorrang vor $formRequestClass für store.
+ * Baut die paginierte Index-Response manuell auf.
  */
-protected ?string $storeRequestClass = null;
-
-/**
- * FormRequest-Klasse speziell für die update-Action.
- * Hat Vorrang vor $formRequestClass für update.
- */
-protected ?string $updateRequestClass = null;
-```
-
-### Auflösungslogik (Priorität)
-
-Passe die `resolveFormRequest()`-Methode an (oder erstelle eine neue die den Action-Kontext kennt):
-
-```php
-protected function resolveFormRequest(string $action): array
+protected function buildPaginatedResponse(mixed $paginator, string $resourceClass, Request $request): JsonResponse
 {
-    $requestClass = match ($action) {
-        'store'  => $this->storeRequestClass ?? $this->formRequestClass,
-        'update' => $this->updateRequestClass ?? $this->formRequestClass,
-        default  => $this->formRequestClass,
-    };
+    $wrapper = config('apilot.response_wrapper');
 
-    if ($requestClass === null) {
-        return request()->all();
-    }
+    // Items durch die Resource transformieren
+    $items = $resourceClass::collection($paginator)->resolve($request);
 
-    if (!class_exists($requestClass)) {
-        throw new \LogicException(
-            sprintf('FormRequest class %s does not exist.', $requestClass)
-        );
-    }
+    // Meta und Links aufbauen
+    $meta = [
+        'current_page' => $paginator->currentPage(),
+        'last_page'    => $paginator->lastPage(),
+        'per_page'     => $paginator->perPage(),
+        'total'        => $paginator->total(),
+    ];
 
-    /** @var \Illuminate\Foundation\Http\FormRequest $formRequest */
-    $formRequest = app($requestClass);
+    $links = [
+        'first' => $paginator->url(1),
+        'last'  => $paginator->url($paginator->lastPage()),
+        'prev'  => $paginator->previousPageUrl(),
+        'next'  => $paginator->nextPageUrl(),
+    ];
 
-    return $formRequest->validated();
-}
-```
-
-### Aufruf in den Controller-Methoden
-
-Ändere die Aufrufe in `store()` und `update()`:
-
-```php
-// In store():
-$validated = $this->resolveFormRequest('store');
-
-// In update():
-$validated = $this->resolveFormRequest('update');
-```
-
-### Verwendung durch den Nutzer
-
-```php
-#[ApiResource(path: '/posts')]
-class PostController extends ModelCrudController
-{
-    protected string $model = Post::class;
-
-    // Store braucht alle Felder
-    protected ?string $storeRequestClass = StorePostRequest::class;
-
-    // Update erlaubt nur image und published_at
-    protected ?string $updateRequestClass = UpdatePostRequest::class;
-
-    // resourceClass für Responses
-    protected ?string $resourceClass = PostResource::class;
-}
-```
-
-```php
-// app/Http/Requests/StorePostRequest.php
-class StorePostRequest extends FormRequest
-{
-    public function rules(): array
-    {
-        return [
-            'title'            => 'required|string|max:255',
-            'description'      => 'required|string',
-            'short_description'=> 'required|string|max:500',
-            'image'            => 'required|url',
-            'published_at'     => 'required|date',
+    // Response zusammenbauen
+    if ($wrapper === null) {
+        $responseData = [
+            'items' => $items,
+            'meta'  => $meta,
+            'links' => $links,
         ];
-    }
-}
-```
-
-```php
-// app/Http/Requests/UpdatePostRequest.php
-class UpdatePostRequest extends FormRequest
-{
-    public function rules(): array
-    {
-        return [
-            'image'        => 'sometimes|url',
-            'published_at' => 'sometimes|date',
-        ];
-    }
-}
-```
-
-### Rückwärtskompatibilität
-
-- **`$formRequestClass` bleibt bestehen** und funktioniert weiterhin als einzige Property wenn `$storeRequestClass` und `$updateRequestClass` nicht gesetzt sind.
-- **Priorität:** Spezifisch (`$storeRequestClass` / `$updateRequestClass`) überschreibt Allgemein (`$formRequestClass`).
-- **Alle drei können gleichzeitig gesetzt sein:** `$formRequestClass` als Fallback, `$storeRequestClass` für store-spezifische Regeln, `$updateRequestClass` für update-spezifische Regeln.
-- **Bestehende Tests dürfen nicht brechen.**
-
-### Auswirkung auf OpenAPI-Generierung
-
-Die OpenAPI-Generierung muss angepasst werden:
-
-- Wenn `$storeRequestClass` gesetzt ist:
-    - POST (store) nutzt das Schema von `$storeRequestClass` → Schema-Name: `{Resource}StoreRequest` (z.B. `PostStoreRequest`)
-    - PUT (update) nutzt das Schema von `$updateRequestClass` (wenn gesetzt) oder `$formRequestClass` → Schema-Name: `{Resource}UpdateRequest` (z.B. `PostUpdateRequest`)
-- Wenn nur `$formRequestClass` gesetzt ist (bisheriges Verhalten):
-    - Beide nutzen dasselbe Schema → Schema-Name: `{Resource}Request` (wie bisher)
-- Wenn `$storeRequestClass` UND `$updateRequestClass` identisch sind:
-    - Nur ein Schema erstellen, nicht duplizieren.
-
-#### Anpassungen im `SchemaBuilder`:
-
-Der `SchemaBuilder` muss fähig sein, mehrere Request-Schemas pro Resource zu erzeugen. Füge eine Methode hinzu oder erweitere die bestehende:
-
-```php
-/**
- * Ermittelt die Schema-Namen und -Klassen für eine Resource.
- *
- * @return array<string, string> — Key = Schema-Name, Value = FormRequest-Klassenname
- */
-public function resolveRequestSchemas(
-    string $resourceName,
-    ?string $formRequestClass,
-    ?string $storeRequestClass,
-    ?string $updateRequestClass,
-): array
-{
-    $schemas = [];
-
-    $storeClass = $storeRequestClass ?? $formRequestClass;
-    $updateClass = $updateRequestClass ?? $formRequestClass;
-
-    if ($storeClass !== null && $updateClass !== null && $storeClass === $updateClass) {
-        // Beide gleich → ein Schema
-        $schemas["{$resourceName}Request"] = $storeClass;
     } else {
-        if ($storeClass !== null) {
-            $schemas["{$resourceName}StoreRequest"] = $storeClass;
-        }
-        if ($updateClass !== null) {
-            $schemas["{$resourceName}UpdateRequest"] = $updateClass;
-        }
-    }
-
-    return $schemas;
-}
-```
-
-#### Anpassungen im `PathBuilder`:
-
-- POST (store): `$ref` zeigt auf `{Resource}StoreRequest` (wenn vorhanden) oder `{Resource}Request`
-- PUT (update): `$ref` zeigt auf `{Resource}UpdateRequest` (wenn vorhanden) oder `{Resource}Request`
-
-#### Zugriff auf die neuen Properties via Reflection:
-
-Der `PathBuilder` / `OpenApiGenerator` muss die neuen Properties `$storeRequestClass` und `$updateRequestClass` per Reflection auslesen (analog zu den bestehenden Properties).
-
----
-
-## 4. OpenAPI Required-Fields Fix
-
-### Problem
-
-Die `required`-Felder aus FormRequests werden nicht korrekt in der OpenAPI-Spec abgebildet. Felder mit der `required`-Rule müssen im `required`-Array des Schemas erscheinen.
-
-### Diagnose
-
-Lies den aktuellen `SchemaBuilder`-Code und prüfe folgende Stellen:
-
-1. **Rule-Parsing:** Wird die `required`-Rule korrekt erkannt?
-    - Bei Pipe-Syntax: `'required|string|max:255'`
-    - Bei Array-Syntax: `['required', 'string', 'max:255']`
-    - Bei komplexen Rules: `['required', Rule::in([...])]`
-
-2. **Required-Array-Aufbau:** Wird das Feld korrekt zum `required`-Array im Schema hinzugefügt?
-
-3. **`sometimes`-Rule:** Felder mit `sometimes` dürfen NICHT in `required` stehen.
-
-4. **`required_if`, `required_with`, `required_unless` etc.:** Diese Felder dürfen NICHT in `required` stehen (conditional required).
-
-5. **`nullable`-Felder die gleichzeitig `required` sind:** `'field' => 'required|nullable|string'` → Feld ist in `required`, hat aber `nullable: true` im Schema.
-
-### Erwartetes Ergebnis
-
-Für diese FormRequest:
-
-```php
-class StorePostRequest extends FormRequest
-{
-    public function rules(): array
-    {
-        return [
-            'title'            => 'required|string|max:255',
-            'description'      => 'required|string',
-            'short_description'=> 'required|string|max:500',
-            'image'            => 'required|url',
-            'published_at'     => 'required|date',
+        $responseData = [
+            $wrapper => $items,
+            'meta'   => $meta,
+            'links'  => $links,
         ];
     }
+
+    return new JsonResponse($responseData, $this->getStatusCode('index'));
 }
-```
 
-Muss das generierte OpenAPI-Schema so aussehen:
-
-```json
+/**
+ * Baut die Single-Item-Response auf.
+ */
+protected function buildItemResponse(mixed $item, string $resourceClass, string $action, Request $request): JsonResponse
 {
-    "PostStoreRequest": {
-        "type": "object",
-        "required": ["title", "description", "short_description", "image", "published_at"],
-        "properties": {
-            "title": {
-                "type": "string",
-                "maxLength": 255
-            },
-            "description": {
-                "type": "string"
-            },
-            "short_description": {
-                "type": "string",
-                "maxLength": 500
-            },
-            "image": {
-                "type": "string",
-                "format": "uri"
-            },
-            "published_at": {
-                "type": "string",
-                "format": "date"
-            }
-        }
+    $wrapper = config('apilot.response_wrapper');
+    $resolved = (new $resourceClass($item))->resolve($request);
+
+    if ($wrapper === null) {
+        $responseData = $resolved;
+    } else {
+        $responseData = [$wrapper => $resolved];
     }
+
+    return new JsonResponse($responseData, $this->getStatusCode($action));
 }
 ```
 
-Für die Update-Request:
+### 3. Beide Controller anpassen
+
+Ersetze in `ModelCrudController` und `ServiceCrudController` die bisherige Response-Erstellung durch Aufrufe von `buildPaginatedResponse()` und `buildItemResponse()`.
+
+**Achte darauf, dass die Hooks (`afterIndex`, `transformResponse` etc.) weiterhin an den richtigen Stellen aufgerufen werden.** Die Response-Builder-Methoden sollen NACH den Hooks aufgerufen werden.
+
+### 4. Config-Kommentar aktualisieren
+
+In `config/apilot.php` den Kommentar für `response_wrapper` erweitern:
 
 ```php
-class UpdatePostRequest extends FormRequest
-{
-    public function rules(): array
-    {
-        return [
-            'image'        => 'sometimes|url',
-            'published_at' => 'sometimes|date',
-        ];
-    }
-}
-```
-
-Muss das Schema so aussehen:
-
-```json
-{
-    "PostUpdateRequest": {
-        "type": "object",
-        "properties": {
-            "image": {
-                "type": "string",
-                "format": "uri"
-            },
-            "published_at": {
-                "type": "string",
-                "format": "date"
-            }
-        }
-    }
-}
-```
-
-**Beachte:** Kein `required`-Array, weil beide Felder `sometimes` haben.
-
-### Rules die als "required" zählen
-
-Nur die folgenden Rules sollen ein Feld ins `required`-Array bringen:
-- `required`
-
-### Rules die NICHT als "required" zählen (auch wenn sie "required" im Namen haben)
-
-- `required_if`
-- `required_unless`
-- `required_with`
-- `required_with_all`
-- `required_without`
-- `required_without_all`
-- `sometimes`
-- `nullable` (macht ein Feld NICHT nicht-required, aber setzt `nullable: true`)
-
----
-
-## 5. Tests
-
-### Neue Test-Dateien:
-
-```
-tests/
-├── Feature/
-│   ├── AttributeRouteRegistrarTest.php        (NEU)
-│   ├── SeparateFormRequestsTest.php           (NEU)
-│   └── AbstractCrudServiceTest.php            (NEU)
-├── Unit/
-│   └── SchemaBuilderRequiredFieldsTest.php    (NEU)
-└── Fixtures/
-    ├── Controllers/
-    │   ├── AttributePostController.php        (NEU — Controller mit #[ApiResource])
-    │   ├── AttributeTagController.php         (NEU — ServiceCrudController mit #[ApiResource])
-    │   ├── SeparateRequestPostController.php  (NEU — Controller mit $storeRequestClass + $updateRequestClass)
-    │   └── AttributeOnlyShowController.php    (NEU — only: ['show'] via Attribut)
-    ├── Requests/
-    │   ├── StorePostRequest.php               (NEU)
-    │   └── UpdatePostRequest.php              (NEU)
-    └── Services/
-        └── MinimalTagService.php              (NEU — erbt von AbstractCrudService, implementiert nur list + find)
-```
-
-### `Feature/AttributeRouteRegistrarTest.php`
-
-```
-1. testAttributeRegistersAllCrudRoutes
-   — Controller mit #[ApiResource(path: '/posts')] → alle 5 Routen vorhanden.
-
-2. testAttributeRespectsOnlyParameter
-   — #[ApiResource(path: '/posts', only: ['index', 'show'])] → nur GET-Routen.
-
-3. testAttributeRespectsExceptParameter
-   — #[ApiResource(path: '/posts', except: ['destroy'])] → kein DELETE.
-
-4. testAttributeAppliesMiddleware
-   — #[ApiResource(path: '/posts', middleware: ['auth:sanctum'])] → Middleware auf Routen angewendet.
-
-5. testAttributeSetsRouteName
-   — #[ApiResource(path: '/posts', name: 'api.v1.posts')] → Route-Namen sind api.v1.posts.index etc.
-
-6. testAttributeAutoGeneratesRouteName
-   — #[ApiResource(path: '/posts')] ohne name → Route-Namen sind posts.index etc.
-
-7. testAttributeWithCustomPrefix
-   — #[ApiResource(path: '/api/v2/posts')] → Prefix ist 'api/v2', Resource-Name ist 'posts'.
-
-8. testAttributeWithSimplePath
-   — #[ApiResource(path: '/tags')] → nutzt Config-Prefix + '/tags'.
-
-9. testAttributeRoutesAppearInRouteRegistry
-   — Registriere via Attribut → RouteRegistry enthält den Eintrag.
-
-10. testAttributeRoutesAppearInOpenApiSpec
-    — Registriere via Attribut → Generierte Spec enthält die Pfade.
-
-11. testManualAndAttributeRegistrationWorkTogether
-    — PostController via Attribut, TagController via CrudRouteRegistrar → beide funktionieren.
-
-12. testRegisterDirectoryFindsAnnotatedControllers
-    — Lege Controller in ein Temp-Verzeichnis, scanne → Routen registriert.
-
-13. testRegisterDirectoryIgnoresNonAnnotatedControllers
-    — Controller ohne Attribut im selben Verzeichnis → wird ignoriert.
-
-14. testControllerWithOnlyShowAttributeRegistersOnlyShowRoute
-    — #[ApiResource(path: '/items', only: ['show'])] → nur GET /items/{id}.
-```
-
-### `Feature/SeparateFormRequestsTest.php`
-
-```
-1. testStoreUsesStoreRequestClass
-   — Controller mit $storeRequestClass → Store validiert mit StorePostRequest-Rules.
-
-2. testUpdateUsesUpdateRequestClass
-   — Controller mit $updateRequestClass → Update validiert mit UpdatePostRequest-Rules.
-
-3. testStoreRejectsFieldsNotInStoreRequest
-   — StorePostRequest hat title, description, image, published_at. POST mit nur { "image": "..." } → 422 (title und description required).
-
-4. testUpdateAcceptsPartialData
-   — UpdatePostRequest hat 'sometimes' Rules. PUT mit nur { "image": "new.jpg" } → 200, nur image geändert.
-
-5. testUpdateRejectsFieldsNotInUpdateRequest
-   — UpdatePostRequest erlaubt nur image und published_at. PUT mit { "title": "Hacked" } → title wird ignoriert (nicht in validated() enthalten), oder 422 wenn title nicht in den Rules steht.
-
-6. testFallbackToFormRequestClassWhenSpecificNotSet
-   — Controller mit nur $formRequestClass (keine $storeRequestClass/$updateRequestClass) → Store und Update nutzen dieselbe Klasse.
-
-7. testStoreRequestFallsBackToFormRequestClass
-   — Controller mit $formRequestClass und $updateRequestClass, aber ohne $storeRequestClass → Store nutzt $formRequestClass.
-
-8. testUpdateRequestFallsBackToFormRequestClass
-   — Controller mit $formRequestClass und $storeRequestClass, aber ohne $updateRequestClass → Update nutzt $formRequestClass.
-
-9. testAllThreeRequestClassesCanBeSetSimultaneously
-   — $formRequestClass, $storeRequestClass, $updateRequestClass alle gesetzt → Spezifische haben Vorrang.
-
-10. testOpenApiSpecHasSeparateStoreAndUpdateSchemas
-    — Controller mit $storeRequestClass + $updateRequestClass → Spec hat PostStoreRequest und PostUpdateRequest Schemas.
-
-11. testOpenApiSpecHasSingleSchemaWhenBothAreSame
-    — Controller mit $storeRequestClass = $updateRequestClass (gleiche Klasse) → Spec hat nur PostRequest Schema.
-
-12. testOpenApiSpecStoreEndpointReferencesStoreSchema
-    — POST /posts → requestBody.$ref = PostStoreRequest.
-
-13. testOpenApiSpecUpdateEndpointReferencesUpdateSchema
-    — PUT /posts/{id} → requestBody.$ref = PostUpdateRequest.
-```
-
-### `Feature/AbstractCrudServiceTest.php`
-
-```
-1. testListThrowsNotImplementedByDefault
-   — MinimalTagService → rufe index auf einen Controller der list nicht implementiert hat → 501 JSON-Response.
-
-2. testCreateThrowsNotImplementedByDefault
-   — POST → 501 JSON-Response mit Message "Method ...::create is not implemented."
-
-3. testUpdateThrowsNotImplementedByDefault
-   — PUT → 501.
-
-4. testDeleteThrowsNotImplementedByDefault
-   — DELETE → 501.
-
-5. testOverriddenMethodWorks
-   — MinimalTagService implementiert list() und find() → index und show funktionieren (200).
-
-6. testNotImplementedResponseFormat
-   — 501-Response hat exaktes Format: { error: { message: "...", status: 501 } }.
-
-7. testServiceCanExtendAbstractCrudService
-   — MinimalTagService ist instanceof CrudServiceInterface.
-
-8. testServiceCanStillImplementInterfaceDirectly
-   — Ein Service der CrudServiceInterface direkt implementiert funktioniert weiterhin.
-```
-
-### `Unit/SchemaBuilderRequiredFieldsTest.php`
-
-```
-1. testRequiredFieldAppearsInRequiredArray
-   — 'title' => 'required|string' → 'title' in required.
-
-2. testMultipleRequiredFieldsAppearInRequiredArray
-   — 'title' => 'required|string', 'body' => 'required|string' → beide in required.
-
-3. testOptionalFieldDoesNotAppearInRequiredArray
-   — 'body' => 'nullable|string' → 'body' NICHT in required.
-
-4. testSometimesFieldDoesNotAppearInRequiredArray
-   — 'image' => 'sometimes|url' → 'image' NICHT in required.
-
-5. testRequiredIfFieldDoesNotAppearInRequiredArray
-   — 'subtitle' => 'required_if:type,article' → 'subtitle' NICHT in required.
-
-6. testRequiredWithFieldDoesNotAppearInRequiredArray
-   — 'confirm' => 'required_with:password' → 'confirm' NICHT in required.
-
-7. testRequiredWithoutFieldDoesNotAppearInRequiredArray
-   — 'email' => 'required_without:phone' → 'email' NICHT in required.
-
-8. testRequiredUnlessFieldDoesNotAppearInRequiredArray
-   — 'name' => 'required_unless:role,admin' → 'name' NICHT in required.
-
-9. testRequiredAndNullableFieldIsRequiredButNullable
-   — 'bio' => 'required|nullable|string' → 'bio' in required UND nullable: true.
-
-10. testFieldWithNoRequiredRuleIsNotRequired
-    — 'tags' => 'array' → 'tags' NICHT in required.
-
-11. testEmptyRulesProduceNoRequiredArray
-    — Keine Rules → kein 'required' Key im Schema (oder leeres Array).
-
-12. testStoreRequestSchemaHasCorrectRequiredFields
-    — StorePostRequest (alle required) → alle Felder in required.
-
-13. testUpdateRequestSchemaHasNoRequiredFields
-    — UpdatePostRequest (alle sometimes) → kein required-Array.
+/*
+|--------------------------------------------------------------------------
+| Response Wrapper
+|--------------------------------------------------------------------------
+| Der Key, unter dem Daten im JSON-Response gewrapped werden.
+|
+| 'data'   → { "data": { ... } }          (Default, Laravel-Standard)
+| 'result' → { "result": { ... } }        (Custom Wrapper-Key)
+| null     → { "id": 1, ... }             (Kein Wrapping für Single-Items)
+|             { "items": [...], "meta": {...}, "links": {...} }
+|             (Paginierte Responses nutzen "items" als Key)
+|
+| HINWEIS: Diese Einstellung betrifft ALLE JsonResources in der App,
+| nicht nur die von Apilot generierten.
+*/
+'response_wrapper' => 'data',
 ```
 
 ---
 
-## 6. Dokumentation aktualisieren
+## Tests
 
-Aktualisiere folgende Doku-Dateien im `docs/`-Verzeichnis:
+### Neue Datei: `tests/Feature/ResponseWrapperTest.php`
 
-### `docs/03-model-crud-controller.md`
+Nutze den bestehenden Post-Fixture-Controller. Registriere Routen im `setUp()`. Ändere die Config per `config()->set()` in jedem Test.
 
-- Ergänze die neuen Properties `$storeRequestClass` und `$updateRequestClass` mit Erklärung und Beispiel.
-- Erkläre die Prioritäts-/Fallback-Logik.
+```
+1. testDefaultWrapperIsData
+   — Config: 'data' (Default).
+   — POST store → Response hat Key "data" mit dem Post-Objekt.
+   — Prüfe: json_decode hat exakt die Keys ["data"].
 
-### `docs/04-service-crud-controller.md`
+2. testDefaultWrapperOnIndex
+   — Config: 'data'.
+   — GET index → Response hat Keys "data", "meta", "links".
+   — "data" ist ein Array von Posts.
 
-- Ergänze die `AbstractCrudService`-Klasse als empfohlene Basisklasse.
-- Zeige ein Beispiel eines Services der nur `list()` und `find()` implementiert.
-- Erkläre die 501-Response bei nicht-implementierten Methoden.
+3. testCustomWrapperKey
+   — Config: 'result'.
+   — POST store → Response hat Key "result" mit dem Post-Objekt.
+   — Prüfe: json_decode hat exakt die Keys ["result"].
 
-### `docs/05-route-registration.md`
+4. testCustomWrapperKeyOnIndex
+   — Config: 'result'.
+   — GET index → Response hat Keys "result", "meta", "links".
+   — "result" ist ein Array von Posts.
 
-- Füge einen neuen Abschnitt "Route Attributes" hinzu.
-- Erkläre das `#[ApiResource]`-Attribut mit allen Parametern.
-- Zeige Beispiele für: minimale Nutzung, only/except, Middleware, Custom Name.
-- Erkläre Auto-Discovery (Config-Option) vs. manuelle Registrierung.
-- Vergleich: "Wann nutze ich Attribute vs. CrudRouteRegistrar?"
+5. testNullWrapperRemovesWrappingOnShow
+   — Config: null.
+   — GET show → Response ist direkt das Post-Objekt (kein Wrapper-Key).
+   — Prüfe: Response enthält "id", "title" etc. direkt auf Top-Level.
 
-### `docs/10-openapi-generation.md`
+6. testNullWrapperRemovesWrappingOnStore
+   — Config: null.
+   — POST store → Response ist direkt das erstellte Post-Objekt.
 
-- Ergänze, dass getrennte Store/Update-Schemas generiert werden.
-- Zeige ein Beispiel wo PostStoreRequest und PostUpdateRequest unterschiedliche Schemas erzeugen.
+7. testNullWrapperRemovesWrappingOnUpdate
+   — Config: null.
+   — PUT update → Response ist direkt das aktualisierte Post-Objekt.
 
-### `docs/12-error-handling.md`
+8. testNullWrapperUsesItemsKeyOnIndex
+   — Config: null.
+   — GET index → Response hat Keys "items", "meta", "links".
+   — "items" ist ein Array von Posts.
 
-- Ergänze den 501-Statuscode für `NotImplementedException`.
+9. testNullWrapperIndexMetaIsCorrect
+   — Config: null.
+   — Erstelle 20 Posts, GET index mit per_page=5.
+   — meta.total = 20, meta.last_page = 4, meta.per_page = 5, meta.current_page = 1.
 
-### `docs/13-configuration.md`
+10. testNullWrapperIndexLinksAreCorrect
+    — Config: null.
+    — Erstelle 20 Posts, GET index mit per_page=5, page=2.
+    — links.prev ist nicht null, links.next ist nicht null.
 
-- Ergänze die neuen Config-Optionen für Auto-Discovery.
+11. testDestroyResponseUnaffectedByWrapper
+    — Config: null, 'data', 'result' → DELETE destroy ist immer 204 mit leerem Body.
 
-### `docs/README.md`
+12. testWrapperWorksWithServiceController
+    — Config: null.
+    — GET index auf ServiceCrudController → Response hat "items", "meta", "links".
 
-- Inhaltsverzeichnis aktualisieren falls nötig.
+13. testWrapperWorksWithServiceControllerShow
+    — Config: null.
+    — GET show auf ServiceCrudController → Response ist direkt das Item-Objekt.
+
+14. testCustomWrapperWorksWithServiceController
+    — Config: 'result'.
+    — POST store auf ServiceCrudController → Response hat Key "result".
+
+15. testWrapperDoesNotAffectErrorResponses
+    — Config: null.
+    — GET show mit ungültiger ID → 404-Response hat weiterhin { "error": { "message": ..., "status": 404 } }.
+
+16. testWrapperDoesNotAffectValidationErrors
+    — Config: null.
+    — POST store mit ungültigen Daten → 422-Response hat weiterhin { "message": ..., "errors": {...} }.
+
+17. testHooksStillWorkWithNullWrapper
+    — Config: null.
+    — Nutze HookedPostController, POST store → Hooks werden aufgerufen UND Response hat kein Wrapper-Key.
+
+18. testHooksStillWorkWithCustomWrapper
+    — Config: 'result'.
+    — Nutze HookedPostController, POST store → Hooks werden aufgerufen UND Response hat Key "result".
+
+19. testTransformResponseHookReceivesUnwrappedData
+    — Config: null.
+    — transformResponse-Hook erhält die Daten im selben Format unabhängig vom Wrapper.
+
+20. testOpenApiSpecReflectsWrapperConfig
+    — Config: 'result'.
+    — Generiere Spec → show-Response-Schema hat Property "result" statt "data".
+
+21. testOpenApiSpecReflectsNullWrapperOnShow
+    — Config: null.
+    — Generiere Spec → show-Response-Schema hat die Properties direkt (kein Wrapper-Key).
+
+22. testOpenApiSpecReflectsNullWrapperOnIndex
+    — Config: null.
+    — Generiere Spec → index-Response-Schema hat "items", "meta", "links".
+```
 
 ---
 
-## 7. Regeln
+## Wichtig
 
-- **Rückwärtskompatibilität:** Alle bestehenden Tests müssen weiterhin grün sein.
-- **`$formRequestClass` bleibt bestehen.** Es ist der Fallback wenn die spezifischen Properties nicht gesetzt sind.
-- **`CrudServiceInterface` bleibt unverändert.** Die `AbstractCrudService` ist eine neue, optionale Klasse.
-- **`CrudRouteRegistrar` bleibt unverändert.** Das `#[ApiResource]`-Attribut ist eine zusätzliche Option.
-- **Alle bestehenden Coding-Regeln gelten weiterhin:** `declare(strict_types=1)`, vollständige Type-Hints, PHP 8.2+, single quotes, keine externen Dependencies.
-- **Führe am Ende alle Tests aus** (bestehende + neue) und stelle sicher, dass alles grün ist.
-
----
-
-## 8. Zusammenfassung: Erwartetes Ergebnis
-
-Nach Abschluss soll folgendes funktionieren:
-
-### Route-Attribute:
-
-```php
-#[ApiResource(path: '/posts', only: ['index', 'show', 'store'], middleware: ['auth:sanctum'])]
-class PostController extends ModelCrudController
-{
-    protected string $model = Post::class;
-}
-```
-
-### Minimaler Service (nur read-only):
-
-```php
-class ProductService extends AbstractCrudService
-{
-    public function list(array $filters, array $sorting, PaginationParams $pagination): PaginatedResult
-    {
-        // Nur diese Methode implementieren
-    }
-
-    public function find(int|string $id): mixed
-    {
-        // Und diese
-    }
-
-    // Alles andere: automatisch 501 Not Implemented
-}
-```
-
-### Getrennte Requests:
-
-```php
-class PostController extends ModelCrudController
-{
-    protected string $model = Post::class;
-    protected ?string $storeRequestClass = StorePostRequest::class;
-    protected ?string $updateRequestClass = UpdatePostRequest::class;
-}
-```
-
-### OpenAPI-Spec mit korrekten Required-Fields und getrennten Schemas:
-
-```json
-{
-    "components": {
-        "schemas": {
-            "PostStoreRequest": {
-                "type": "object",
-                "required": ["title", "description", "short_description", "image", "published_at"],
-                "properties": { ... }
-            },
-            "PostUpdateRequest": {
-                "type": "object",
-                "properties": { ... }
-            }
-        }
-    }
-}
-```
+- **Rückwärtskompatibilität:** Der Default-Wert ist `'data'` — bestehende Tests erwarten dieses Format und müssen weiterhin grün sein.
+- **Globaler Effekt:** `JsonResource::withoutWrapping()` betrifft die gesamte App. Das muss in der Doku und Config klar kommuniziert werden. Alternativ: Die Controller bauen die Responses komplett manuell (ohne sich auf Laravels Resource-Wrapping zu verlassen), dann ist der Effekt lokal. **Bevorzuge die manuelle Response-Erstellung**, um keine Seiteneffekte auf andere Teile der App zu haben.
+- **Error-Responses:** Fehler-Responses (404, 403, 422, 500) dürfen NICHT vom Wrapper beeinflusst werden. Sie haben ihr eigenes Format.
+- **OpenAPI-Spec:** Die Spec muss den konfigurierten Wrapper-Key reflektieren.
+- **Alle bestehenden Tests müssen grün bleiben.**
+- **Führe am Ende alle Tests aus** (bestehende + neue).
