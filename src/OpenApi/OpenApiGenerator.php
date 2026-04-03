@@ -107,14 +107,25 @@ class OpenApiGenerator
                 $schemas[$name] = $this->schemaBuilder->fromFormRequest($class);
             }
 
-            // Response-Schema aus Resource
+            // Response-Schema aus Resource oder Field Visibility
             $resourceClass = $this->getControllerProperty($entry->controllerClass, 'resourceClass');
             $modelClass    = $this->getControllerProperty($entry->controllerClass, 'model');
 
             if ($resourceClass !== null && $resourceClass !== DefaultResource::class) {
                 $schemas[$schemaName . 'Response'] = $this->schemaBuilder->fromResource($resourceClass, $modelClass);
             } else {
-                $schemas[$schemaName . 'Response'] = ['type' => 'object', 'additionalProperties' => true];
+                $visibleFields = $this->getControllerProperty($entry->controllerClass, 'visibleFields') ?? [];
+                $hiddenFields  = $this->getControllerProperty($entry->controllerClass, 'hiddenFields') ?? [];
+
+                if (!empty($visibleFields) || !empty($hiddenFields)) {
+                    $schemas[$schemaName . 'Response'] = $this->schemaBuilder->fromFieldVisibility(
+                        $visibleFields,
+                        $hiddenFields,
+                        $modelClass,
+                    );
+                } else {
+                    $schemas[$schemaName . 'Response'] = ['type' => 'object', 'additionalProperties' => true];
+                }
             }
         }
 

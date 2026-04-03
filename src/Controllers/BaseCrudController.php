@@ -21,7 +21,32 @@ abstract class BaseCrudController extends Controller
 
     protected ?string $updateRequestClass = null;
 
+    protected ?string $indexRequestClass = null;
+
+    protected ?string $showRequestClass = null;
+
+    protected ?string $destroyRequestClass = null;
+
     protected ?string $resourceClass = null;
+
+    /**
+     * Whitelist: Only show these fields in the response.
+     * Ignored when $resourceClass is set.
+     * Can be overridden by the visibleFields() method.
+     *
+     * @var array<int, string>
+     */
+    protected array $visibleFields = [];
+
+    /**
+     * Blacklist: Remove these fields from the response.
+     * Applied AFTER whitelist — blacklist always wins.
+     * Ignored when $resourceClass is set.
+     * Can be overridden by the hiddenFields() method.
+     *
+     * @var array<int, string>
+     */
+    protected array $hiddenFields = [];
 
     protected function resolveFormRequest(string $action = ''): array
     {
@@ -45,6 +70,101 @@ abstract class BaseCrudController extends Controller
         $formRequest = app($requestClass);
 
         return $formRequest->validated();
+    }
+
+    /**
+     * Resolves the FormRequest for authorization-only actions (index, show, destroy).
+     * No fallback to $formRequestClass — only the action-specific class is used.
+     * Throws if authorize() returns false (403).
+     */
+    protected function resolveAuthorization(string $action): void
+    {
+        $requestClass = match ($action) {
+            'index'   => $this->indexRequestClass,
+            'show'    => $this->showRequestClass,
+            'destroy' => $this->destroyRequestClass,
+            default   => null,
+        };
+
+        if ($requestClass === null) {
+            return;
+        }
+
+        if (!class_exists($requestClass)) {
+            throw new LogicException(
+                sprintf('FormRequest class %s does not exist.', $requestClass)
+            );
+        }
+
+        app($requestClass);
+    }
+
+    /**
+     * Dynamic whitelist — override in subclass for request-based logic.
+     *
+     * @return array<int, string>
+     */
+    protected function visibleFields(Request $request): array
+    {
+        return $this->visibleFields;
+    }
+
+    /**
+     * Dynamic blacklist — override in subclass for request-based logic.
+     *
+     * @return array<int, string>
+     */
+    protected function hiddenFields(Request $request): array
+    {
+        return $this->hiddenFields;
+    }
+
+    /**
+     * Applies whitelist and blacklist field visibility to the given data array.
+     * Returns null when $resourceClass is set (resource handles field selection).
+     *
+     * @param array<string, mixed> $data
+     * @return array<string, mixed>|null
+     */
+    protected function applyFieldVisibility(array $data, Request $request): ?array
+    {
+        if ($this->resourceClass !== null) {
+            return null;
+        }
+
+        $visible = $this->visibleFields($request);
+        if (!empty($visible)) {
+            $data = array_intersect_key($data, array_flip($visible));
+        }
+
+        $hidden = $this->hiddenFields($request);
+        if (!empty($hidden)) {
+            $data = array_diff_key($data, array_flip($hidden));
+        }
+
+        return $data;
+    }
+
+    /**
+     * Converts a mixed item to an array for field visibility processing.
+     *
+     * @return array<string, mixed>
+     */
+    protected function itemToArray(mixed $item): array
+    {
+        if (is_array($item)) {
+            return $item;
+        }
+
+        if (method_exists($item, 'toArray')) {
+            return $item->toArray();
+        }
+
+        if ($item instanceof \stdClass) {
+            return (array) $item;
+        }
+
+        return [];
     }
 
     protected function resolveResourceClass(): string
@@ -132,6 +252,23 @@ abstract class BaseCrudController extends Controller
             'none'  => $resolved,
             'named' => [$this->resolveWrapperKey() => $resolved],
             default => $resolved,
+        };
+
+        return new JsonResponse($responseData, $this->getStatusCode($action));
+    }
+
+    /**
+     * Builds a JsonResponse for raw array data (used when field visibility is active).
+     * In 'laravel' mode, wraps under 'data' to match the standard Laravel resource format.
+     */
+    protected function buildRawDataResponse(mixed $resolved, string $action): JsonResponse
+    {
+        $mode = $this->resolveWrapperMode();
+
+        $responseData = match ($mode) {
+            'none'  => $resolved,
+            'named' => [$this->resolveWrapperKey() => $resolved],
+            default => ['data' => $resolved],
         };
 
         return new JsonResponse($responseData, $this->getStatusCode($action));

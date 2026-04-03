@@ -31,6 +31,7 @@ abstract class ServiceCrudController extends BaseCrudController
 
     public function index(Request $request): JsonResponse
     {
+        $this->resolveAuthorization('index');
         $service = $this->resolveService();
 
         $filters = $this->extractFilters($request);
@@ -67,6 +68,7 @@ abstract class ServiceCrudController extends BaseCrudController
 
     public function show(Request $request, int|string $id): JsonResponse
     {
+        $this->resolveAuthorization('show');
         $service = $this->resolveService();
 
         $item = $service->find($id);
@@ -76,6 +78,14 @@ abstract class ServiceCrudController extends BaseCrudController
         }
 
         $item = $this->afterShow($item, $request);
+
+        $data = $this->itemToArray($item);
+        $filteredData = $this->applyFieldVisibility($data, $request);
+
+        if ($filteredData !== null) {
+            $resolved = $this->transformResponse($filteredData, 'show', $request);
+            return $this->buildRawDataResponse($resolved, 'show');
+        }
 
         $resourceClass = $this->resolveResourceClass();
         $resolved = (new $resourceClass($item))->resolve($request);
@@ -92,6 +102,14 @@ abstract class ServiceCrudController extends BaseCrudController
         $validated = $this->beforeStore($validated, $request);
         $item = $service->create($validated);
         $item = $this->afterStore($item, $request);
+
+        $data = $this->itemToArray($item);
+        $filteredData = $this->applyFieldVisibility($data, $request);
+
+        if ($filteredData !== null) {
+            $resolved = $this->transformResponse($filteredData, 'store', $request);
+            return $this->buildRawDataResponse($resolved, 'store');
+        }
 
         $resourceClass = $this->resolveResourceClass();
         $resolved = (new $resourceClass($item))->resolve($request);
@@ -115,6 +133,14 @@ abstract class ServiceCrudController extends BaseCrudController
         $item = $service->update($id, $validated);
         $item = $this->afterUpdate($item, $request);
 
+        $data = $this->itemToArray($item);
+        $filteredData = $this->applyFieldVisibility($data, $request);
+
+        if ($filteredData !== null) {
+            $resolved = $this->transformResponse($filteredData, 'update', $request);
+            return $this->buildRawDataResponse($resolved, 'update');
+        }
+
         $resourceClass = $this->resolveResourceClass();
         $resolved = (new $resourceClass($item))->resolve($request);
         $resolved = $this->transformResponse($resolved, 'update', $request);
@@ -124,6 +150,7 @@ abstract class ServiceCrudController extends BaseCrudController
 
     public function destroy(Request $request, int|string $id): JsonResponse
     {
+        $this->resolveAuthorization('destroy');
         $service = $this->resolveService();
 
         $existing = $service->find($id);
@@ -279,14 +306,18 @@ abstract class ServiceCrudController extends BaseCrudController
 
     /**
      * Builds the normalized data array (items, meta, links) from a PaginatedResult.
-     * The actual response wrapping is handled by index() based on the wrapper mode.
+     * Applies field visibility to each item when $resourceClass is not set.
      *
      * @return array{items: array<mixed>, meta: array<string, int>, links: array<string, string|null>}
      */
     protected function buildPaginatedResponse(PaginatedResult $result, Request $request): array
     {
         $resourceClass = $this->resolveResourceClass();
-        $items = array_map(fn (mixed $item) => (new $resourceClass($item))->resolve($request), $result->items);
+        $items = array_map(function (mixed $item) use ($resourceClass, $request) {
+            $data = $this->itemToArray($item);
+            $filtered = $this->applyFieldVisibility($data, $request);
+            return $filtered ?? (new $resourceClass($item))->resolve($request);
+        }, $result->items);
 
         $lastPage    = $result->lastPage();
         $currentPage = $result->currentPage;

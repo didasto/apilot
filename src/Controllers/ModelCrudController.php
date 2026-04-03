@@ -33,6 +33,7 @@ abstract class ModelCrudController extends BaseCrudController
 
     public function index(Request $request): JsonResponse
     {
+        $this->resolveAuthorization('index');
         $this->resolveModel();
 
         $query = ($this->model)::query();
@@ -46,7 +47,9 @@ abstract class ModelCrudController extends BaseCrudController
         $resourceClass = $this->resolveResourceClass();
         $mode = $this->resolveWrapperMode();
 
-        if ($mode === 'laravel') {
+        // Use the collection pipeline only when a custom resource class is set
+        // and we're in laravel mode. Otherwise build manually (required for field visibility).
+        if ($mode === 'laravel' && $this->resourceClass !== null) {
             // Let Laravel's JsonResource handle response formatting.
             // transformResponse is still called (with empty data) so that hooks
             // implementing side-effects (logging, events) are not skipped.
@@ -58,7 +61,10 @@ abstract class ModelCrudController extends BaseCrudController
         }
 
         $items = collect($paginator->items())
-            ->map(fn (Model $model) => (new $resourceClass($model))->resolve($request))
+            ->map(function (Model $model) use ($resourceClass, $request) {
+                $filtered = $this->applyFieldVisibility($model->toArray(), $request);
+                return $filtered ?? (new $resourceClass($model))->resolve($request);
+            })
             ->all();
 
         $normalizedData = [
@@ -97,10 +103,18 @@ abstract class ModelCrudController extends BaseCrudController
 
     public function show(Request $request, int|string $id): JsonResponse
     {
+        $this->resolveAuthorization('show');
         $this->resolveModel();
 
         $item = $this->findOrFail($id);
         $item = $this->afterShow($item, $request);
+
+        $filteredData = $this->applyFieldVisibility($item->toArray(), $request);
+
+        if ($filteredData !== null) {
+            $resolved = $this->transformResponse($filteredData, 'show', $request);
+            return $this->buildRawDataResponse($resolved, 'show');
+        }
 
         $resourceClass = $this->resolveResourceClass();
         $resolved = (new $resourceClass($item))->resolve($request);
@@ -117,6 +131,13 @@ abstract class ModelCrudController extends BaseCrudController
         $validated = $this->beforeStore($validated, $request);
         $item = ($this->model)::create($validated);
         $item = $this->afterStore($item, $request);
+
+        $filteredData = $this->applyFieldVisibility($item->toArray(), $request);
+
+        if ($filteredData !== null) {
+            $resolved = $this->transformResponse($filteredData, 'store', $request);
+            return $this->buildRawDataResponse($resolved, 'store');
+        }
 
         $resourceClass = $this->resolveResourceClass();
         $resolved = (new $resourceClass($item))->resolve($request);
@@ -135,6 +156,13 @@ abstract class ModelCrudController extends BaseCrudController
         $item->update($validated);
         $item = $this->afterUpdate($item, $request);
 
+        $filteredData = $this->applyFieldVisibility($item->toArray(), $request);
+
+        if ($filteredData !== null) {
+            $resolved = $this->transformResponse($filteredData, 'update', $request);
+            return $this->buildRawDataResponse($resolved, 'update');
+        }
+
         $resourceClass = $this->resolveResourceClass();
         $resolved = (new $resourceClass($item))->resolve($request);
         $resolved = $this->transformResponse($resolved, 'update', $request);
@@ -144,6 +172,7 @@ abstract class ModelCrudController extends BaseCrudController
 
     public function destroy(Request $request, int|string $id): JsonResponse
     {
+        $this->resolveAuthorization('destroy');
         $this->resolveModel();
 
         $item = $this->findOrFail($id);

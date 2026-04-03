@@ -93,6 +93,103 @@ class SchemaBuilder
     }
 
     /**
+     * Erzeugt ein OpenAPI-Schema aus visibleFields/hiddenFields-Konfiguration.
+     *
+     * @param array<int, string> $visibleFields
+     * @param array<int, string> $hiddenFields
+     * @param string|null        $modelClass
+     * @return array<string, mixed>
+     */
+    public function fromFieldVisibility(array $visibleFields, array $hiddenFields, ?string $modelClass): array
+    {
+        $allFields = $this->getModelFields($modelClass);
+
+        if (empty($allFields)) {
+            // No model fields derivable — use visibleFields as property list if set
+            if (!empty($visibleFields)) {
+                $properties = [];
+                foreach ($visibleFields as $field) {
+                    $properties[$field] = ['type' => 'string'];
+                }
+                return ['type' => 'object', 'properties' => $properties];
+            }
+            return ['type' => 'object', 'additionalProperties' => true];
+        }
+
+        // Apply whitelist
+        if (!empty($visibleFields)) {
+            $allFields = array_intersect_key($allFields, array_flip($visibleFields));
+        }
+
+        // Apply blacklist
+        if (!empty($hiddenFields)) {
+            $allFields = array_diff_key($allFields, array_flip($hiddenFields));
+        }
+
+        if (empty($allFields)) {
+            return ['type' => 'object', 'additionalProperties' => true];
+        }
+
+        $properties = [];
+        foreach ($allFields as $field => $type) {
+            $properties[$field] = ['type' => $type];
+        }
+
+        return ['type' => 'object', 'properties' => $properties];
+    }
+
+    /**
+     * Ermittelt die Felder eines Models mit ihren OpenAPI-Typen.
+     *
+     * @param string|null $modelClass
+     * @return array<string, string>
+     */
+    private function getModelFields(?string $modelClass): array
+    {
+        if ($modelClass === null || !class_exists($modelClass)) {
+            return [];
+        }
+
+        try {
+            $model = new $modelClass();
+            $casts = method_exists($model, 'getCasts') ? $model->getCasts() : [];
+            $fillable = method_exists($model, 'getFillable') ? $model->getFillable() : [];
+
+            $fields = ['id' => 'integer'];
+
+            foreach ($fillable as $field) {
+                $type = 'string';
+                if (isset($casts[$field])) {
+                    $type = $this->castToOpenApiType($casts[$field]);
+                }
+                $fields[$field] = $type;
+            }
+
+            $fields['created_at'] = 'string';
+            $fields['updated_at'] = 'string';
+
+            return $fields;
+        } catch (\Throwable) {
+            return [];
+        }
+    }
+
+    /**
+     * Konvertiert einen Laravel-Cast-Typ in einen OpenAPI-Typ.
+     */
+    private function castToOpenApiType(string $cast): string
+    {
+        return match (true) {
+            str_starts_with($cast, 'decimal') => 'number',
+            in_array($cast, ['int', 'integer'], true) => 'integer',
+            in_array($cast, ['float', 'double', 'real'], true) => 'number',
+            in_array($cast, ['bool', 'boolean'], true) => 'boolean',
+            in_array($cast, ['array', 'json', 'collection'], true) => 'array',
+            default => 'string',
+        };
+    }
+
+    /**
      * Erzeugt ein OpenAPI-Schema aus einer Resource-Klasse.
      *
      * @param string      $resourceClass
